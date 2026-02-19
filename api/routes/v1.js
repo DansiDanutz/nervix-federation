@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 
+const DEFAULT_PAGE = 1;
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 100;
+
 /**
  * @route   POST /api/v1/enroll
  * @desc    Submit enrollment request for a new agent
@@ -173,6 +177,143 @@ router.post('/auth/verify', async (req, res) => {
     res.status(500).json({
       error: 'Internal Server Error',
       message: 'Failed to verify token',
+    });
+  }
+});
+
+/**
+ * Build Supabase PostgREST URL for agents listing with search/filters/pagination.
+ * @param {Object} options - Query options.
+ * @param {string} [options.search] - Search string.
+ * @param {string} [options.category] - Category filter.
+ * @param {string} [options.status] - Status filter.
+ * @param {string} [options.availabilityStatus] - Availability status filter.
+ * @param {number} options.offset - Row offset.
+ * @param {number} options.limit - Max rows to return.
+ * @returns {string} Supabase REST URL.
+ */
+function buildAgentsSupabaseUrl({ search, category, status, availabilityStatus, offset, limit }) {
+  const params = new URLSearchParams();
+  params.set(
+    'select',
+    'id,agent_id,agent_name,agent_metadata,reputation_score,reputation_level,total_tasks_completed,total_earnings,created_at,updated_at,category,status,availability_status,skills,bio'
+  );
+
+  if (category) params.set('category', `eq.${category}`);
+  if (status) params.set('status', `eq.${status}`);
+  if (availabilityStatus) params.set('availability_status', `eq.${availabilityStatus}`);
+
+  if (search) {
+    const escaped = search.replace(/,/g, '\\,');
+    params.set(
+      'or',
+      `(agent_name.ilike.*${escaped}*,skills.ilike.*${escaped}*,bio.ilike.*${escaped}*)`
+    );
+  }
+
+  params.set('offset', String(offset));
+  params.set('limit', String(limit));
+  return `${process.env.SUPABASE_URL}/rest/v1/agents?${params.toString()}`;
+}
+
+/**
+ * @route   GET /api/v1/agents
+ * @desc    List agents with search, filters, and pagination
+ * @access  Public
+ */
+router.get('/agents', async (req, res) => {
+  try {
+    const {
+      search,
+      category,
+      status,
+      availability_status: availabilityStatus,
+      page: rawPage,
+      limit: rawLimit,
+      offset: rawOffset,
+    } = req.query;
+
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Missing required Supabase configuration',
+      });
+    }
+
+    const page = rawPage === undefined ? DEFAULT_PAGE : Number(rawPage);
+    const limit = rawLimit === undefined ? DEFAULT_LIMIT : Number(rawLimit);
+    const offset = rawOffset === undefined ? (page - 1) * limit : Number(rawOffset);
+
+    if (
+      Number.isNaN(page) || Number.isNaN(limit) || Number.isNaN(offset) ||
+      page < 1 || limit < 1 || limit > MAX_LIMIT || offset < 0
+    ) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Invalid pagination parameters. page >= 1, limit 1-100, offset >= 0',
+      });
+    }
+
+    if (
+      req.query.category === '' ||
+      req.query.status === '' ||
+      req.query.availability_status === '' ||
+      req.query.search === ''
+    ) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Provided query parameters cannot be empty',
+      });
+    }
+
+    const url = buildAgentsSupabaseUrl({
+      search,
+      category,
+      status,
+      availabilityStatus,
+      offset,
+      limit,
+    });
+
+    const supabaseResponse = await fetch(url, {
+      headers: {
+        apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        Prefer: 'count=exact',
+      },
+    });
+
+    const text = await supabaseResponse.text();
+    const agents = text ? JSON.parse(text) : [];
+
+    if (!supabaseResponse.ok) {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Failed to fetch agents from Supabase',
+        details: agents,
+      });
+    }
+
+    const contentRange = supabaseResponse.headers.get('content-range');
+    const total = contentRange ? Number(contentRange.split('/')[1]) : agents.length;
+
+    return res.status(200).json({
+      agents,
+      total,
+      pagination: {
+        page,
+        limit,
+        offset,
+        total_pages: Math.ceil(total / limit),
+        has_next: offset + limit < total,
+        has_prev: offset > 0,
+      },
+    });
+  } catch (error) {
+    console.error('Agents list error:', error);
+    return res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to retrieve agents',
     });
   }
 });
