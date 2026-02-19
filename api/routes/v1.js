@@ -1,9 +1,53 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
+
+/**
+ * Insert agent into Supabase agents table via REST API.
+ * @param {Object} payload - Agent data to insert
+ * @returns {Promise<Object>} Inserted agent record
+ * @throws {Error} If Supabase request fails
+ */
+async function supabaseInsertAgent(payload) {
+  const url = `${process.env.SUPABASE_URL}/rest/v1/agents`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!response.ok) {
+    const details =
+      typeof data === 'string'
+        ? data
+        : data?.message || data?.error_description || data?.error || 'Unknown Supabase error';
+    throw new Error(`Supabase insert failed (${response.status}): ${details}`);
+  }
+
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error('Supabase insert returned no rows');
+  }
+
+  return data[0];
+}
 
 /**
  * @route   POST /api/v1/enroll
@@ -47,30 +91,38 @@ router.post('/enroll', async (req, res) => {
       });
     }
 
-    // TODO: Check if agent already exists in database
-    // TODO: Generate enrollment challenge
-    // TODO: Store enrollment request in database
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Missing required Supabase configuration',
+      });
+    }
 
-    // Mock enrollment request
-    const enrollmentRequest = {
-      id: generateUUID(),
+    // Generate challenge and timestamps
+    const challenge = generateChallenge();
+    const now = new Date();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    // Insert into Supabase
+    const insertedAgent = await supabaseInsertAgent({
       agent_id,
       agent_name,
       agent_public_key,
       agent_metadata: agent_metadata || {},
-      challenge: generateChallenge(),
+      challenge,
       status: 'pending',
-      created_at: new Date().toISOString(),
-      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
-    };
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+      expires_at: expiresAt.toISOString(),
+    });
 
-    console.log('Enrollment request received:', enrollmentRequest.id);
+    console.log('Enrollment request received:', insertedAgent.id);
 
     res.status(201).json({
       message: 'Enrollment request submitted',
-      enrollment_id: enrollmentRequest.id,
-      challenge: enrollmentRequest.challenge,
-      expires_at: enrollmentRequest.expires_at,
+      enrollment_id: insertedAgent.id,
+      challenge: insertedAgent.challenge,
+      expires_at: insertedAgent.expires_at,
       instructions: [
         '1. Sign the challenge with your agent\'s private key',
         '2. Submit the signature via POST /api/v1/enroll/:id/respond',
@@ -80,9 +132,12 @@ router.post('/enroll', async (req, res) => {
     });
   } catch (error) {
     console.error('Enrollment error:', error);
-    res.status(500).json({
-      error: 'Internal Server Error',
-      message: 'Failed to process enrollment request',
+    const isSupabaseError = error.message.includes('Supabase');
+    res.status(isSupabaseError ? 502 : 500).json({
+      error: isSupabaseError ? 'Bad Gateway' : 'Internal Server Error',
+      message: isSupabaseError
+        ? `Supabase enrollment failed: ${error.message}`
+        : 'Failed to process enrollment request',
     });
   }
 });
@@ -406,9 +461,13 @@ function generateUUID() {
   });
 }
 
+/**
+ * Generate a challenge using current timestamp + cryptographic random bytes.
+ * @returns {string} Base64 encoded challenge string.
+ */
 function generateChallenge() {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2);
+  const timestamp = Date.now().toString();
+  const random = crypto.randomBytes(16).toString('hex');
   return Buffer.from(`Nervix-Challenge:${timestamp}:${random}`).toString('base64');
 }
 
