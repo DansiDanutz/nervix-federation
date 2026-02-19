@@ -2,8 +2,39 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 console.log('🦞 Building Nervix website...\n');
+
+// Generate version information
+let gitCommit = 'unknown';
+let gitBranch = 'unknown';
+let buildDate = new Date().toISOString();
+
+try {
+    gitCommit = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+    gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8' }).trim();
+} catch (e) {
+    console.log('⚠️  Git information not available');
+}
+
+const version = {
+    version: '1.0.0',
+    buildDate,
+    gitCommit,
+    gitBranch,
+    deployment: 'production',
+    environment: 'vercel',
+    url: 'https://nervix-federation.vercel.app',
+    apiUrl: 'https://api.nervix.ai',
+};
+
+// Write version.json to public
+fs.writeFileSync(
+    path.join(__dirname, 'public', 'version.json'),
+    JSON.stringify(version, null, 2)
+);
+console.log('✓ Generated version.json');
 
 // Create docs directory if it doesn't exist
 const docsDir = path.join(__dirname, 'public', 'docs');
