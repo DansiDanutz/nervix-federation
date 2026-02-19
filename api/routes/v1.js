@@ -452,6 +452,396 @@ router.post('/tasks/:id/claim', async (req, res) => {
   }
 });
 
+// ============================================================================
+// Federation API Routes
+// ============================================================================
+
+/**
+ * Update agent in Supabase agents table via REST API.
+ * @param {string} agentId - Agent ID
+ * @param {Object} updates - Fields to update
+ * @returns {Promise<Object>} Updated agent record
+ * @throws {Error} If Supabase request fails
+ */
+async function supabaseUpdateAgent(agentId, updates) {
+  const url = `${process.env.SUPABASE_URL}/rest/v1/agents?agent_id=eq.${agentId}`;
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({ ...updates, updated_at: new Date().toISOString() }),
+  });
+
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Supabase update failed (${response.status}): ${data?.message || data || 'Unknown error'}`);
+  }
+
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error('Agent not found');
+  }
+
+  return data[0];
+}
+
+/**
+ * Query agent from Supabase agents table via REST API.
+ * @param {string} agentId - Agent ID
+ * @returns {Promise<Object|null>} Agent record or null if not found
+ */
+async function supabaseGetAgent(agentId) {
+  const url = `${process.env.SUPABASE_URL}/rest/v1/agents?agent_id=eq.${agentId}&limit=1`;
+
+  const response = await fetch(url, {
+    headers: {
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+  });
+
+  const text = await response.text();
+  const agents = text ? JSON.parse(text) : [];
+
+  if (!response.ok) {
+    throw new Error(`Supabase query failed (${response.status}): ${agents?.message || agents || 'Unknown error'}`);
+  }
+
+  return agents.length > 0 ? agents[0] : null;
+}
+
+/**
+ * Query multiple agents from Supabase agents table via REST API.
+ * @param {Object} filters - Query filters
+ * @param {number} limit - Maximum results
+ * @param {number} offset - Pagination offset
+ * @returns {Promise<{agents: Array, total: number}>}
+ */
+async function supabaseQueryAgents(filters = {}, limit = 20, offset = 0) {
+  const params = new URLSearchParams();
+  params.set('select', '*');
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+
+  for (const [key, value] of Object.entries(filters)) {
+    params.set(key, `eq.${value}`);
+  }
+
+  const url = `${process.env.SUPABASE_URL}/rest/v1/agents?${params.toString()}`;
+
+  const response = await fetch(url, {
+    headers: {
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Prefer: 'count=exact',
+    },
+  });
+
+  const text = await response.text();
+  const agents = text ? JSON.parse(text) : [];
+
+  if (!response.ok) {
+    throw new Error(`Supabase query failed (${response.status}): ${agents?.message || agents || 'Unknown error'}`);
+  }
+
+  const contentRange = response.headers.get('content-range');
+  const total = contentRange ? Number(contentRange.split('/')[1]) : agents.length;
+
+  return { agents, total };
+}
+
+/**
+ * @route   POST /api/v1/federation/register
+ * @desc    Agent registers its presence with the federation
+ * @access  Public (requires agent_id from enrollment)
+ */
+router.post('/federation/register', async (req, res) => {
+  try {
+    const { agent_id, endpoint_url, capabilities, status, availability_status } = req.body;
+
+    if (!agent_id || !endpoint_url) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Missing required fields: agent_id, endpoint_url',
+      });
+    }
+
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Missing required Supabase configuration',
+      });
+    }
+
+    // Validate URL format
+    try {
+      new URL(endpoint_url);
+    } catch {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'endpoint_url must be a valid URL',
+      });
+    }
+
+    // Check if agent exists
+    const existingAgent = await supabaseGetAgent(agentId);
+    if (!existingAgent) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Agent not found. Please enroll first.',
+      });
+    }
+
+    // Update agent with federation info
+    const updatedAgent = await supabaseUpdateAgent(agentId, {
+      agent_metadata: {
+        ...existingAgent.agent_metadata,
+        endpoint_url,
+        capabilities: capabilities || [],
+      },
+      status: status || 'active',
+      availability_status: availability_status || 'available',
+    });
+
+    console.log('Federation registration:', agent_id);
+
+    res.status(200).json({
+      message: 'Agent registered with federation',
+      agent: {
+        id: updatedAgent.id,
+        agent_id: updatedAgent.agent_id,
+        agent_name: updatedAgent.agent_name,
+        endpoint_url: updatedAgent.agent_metadata.endpoint_url,
+        capabilities: updatedAgent.agent_metadata.capabilities,
+        status: updatedAgent.status,
+        availability_status: updatedAgent.availability_status,
+        registered_at: updatedAgent.updated_at,
+      },
+    });
+  } catch (error) {
+    console.error('Federation registration error:', error);
+    const isSupabaseError = error.message.includes('Supabase');
+    res.status(isSupabaseError ? 502 : 500).json({
+      error: isSupabaseError ? 'Bad Gateway' : 'Internal Server Error',
+      message: isSupabaseError ? error.message : 'Failed to register agent',
+    });
+  }
+});
+
+/**
+ * @route   GET /api/v1/federation/agents
+ * @desc    List all registered federation agents with filters
+ * @access  Public
+ */
+router.get('/federation/agents', async (req, res) => {
+  try {
+    const {
+      status,
+      availability_status,
+      category,
+      page: rawPage,
+      limit: rawLimit,
+      offset: rawOffset,
+    } = req.query;
+
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Missing required Supabase configuration',
+      });
+    }
+
+    const page = rawPage === undefined ? DEFAULT_PAGE : Number(rawPage);
+    const limit = rawLimit === undefined ? DEFAULT_LIMIT : Number(rawLimit);
+    const offset = rawOffset === undefined ? (page - 1) * limit : Number(rawOffset);
+
+    if (
+      Number.isNaN(page) || Number.isNaN(limit) || Number.isNaN(offset) ||
+      page < 1 || limit < 1 || limit > MAX_LIMIT || offset < 0
+    ) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Invalid pagination parameters',
+      });
+    }
+
+    // Build filters
+    const filters = {};
+    if (status) filters.status = status;
+    if (availability_status) filters.availability_status = availability_status;
+    if (category) filters.category = category;
+
+    const { agents, total } = await supabaseQueryAgents(filters, limit, offset);
+
+    // Filter for agents with endpoint_url (federation registered)
+    const federationAgents = agents.filter(
+      (agent) => agent.agent_metadata?.endpoint_url
+    );
+
+    res.status(200).json({
+      agents: federationAgents.map((agent) => ({
+        id: agent.id,
+        agent_id: agent.agent_id,
+        agent_name: agent.agent_name,
+        endpoint_url: agent.agent_metadata?.endpoint_url,
+        capabilities: agent.agent_metadata?.capabilities || [],
+        status: agent.status,
+        availability_status: agent.availability_status,
+        reputation_score: agent.reputation_score,
+        category: agent.category,
+        last_seen: agent.agent_metadata?.last_seen,
+      })),
+      total: federationAgents.length,
+      pagination: {
+        page,
+        limit,
+        offset,
+        total_pages: Math.ceil(total / limit),
+        has_next: offset + limit < total,
+        has_prev: offset > 0,
+      },
+    });
+  } catch (error) {
+    console.error('Federation agents list error:', error);
+    const isSupabaseError = error.message.includes('Supabase');
+    res.status(isSupabaseError ? 502 : 500).json({
+      error: isSupabaseError ? 'Bad Gateway' : 'Internal Server Error',
+      message: isSupabaseError ? error.message : 'Failed to retrieve federation agents',
+    });
+  }
+});
+
+/**
+ * @route   GET /api/v1/federation/agents/:agentId
+ * @desc    Get specific federation agent details
+ * @access  Public
+ */
+router.get('/federation/agents/:agentId', async (req, res) => {
+  try {
+    const { agentId } = req.params;
+
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Missing required Supabase configuration',
+      });
+    }
+
+    const agent = await supabaseGetAgent(agentId);
+
+    if (!agent) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Agent not found',
+      });
+    }
+
+    if (!agent.agent_metadata?.endpoint_url) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Agent not registered with federation',
+      });
+    }
+
+    res.status(200).json({
+      agent: {
+        id: agent.id,
+        agent_id: agent.agent_id,
+        agent_name: agent.agent_name,
+        endpoint_url: agent.agent_metadata.endpoint_url,
+        capabilities: agent.agent_metadata.capabilities || [],
+        status: agent.status,
+        availability_status: agent.availability_status,
+        reputation_score: agent.reputation_score,
+        reputation_level: agent.reputation_level,
+        total_tasks_completed: agent.total_tasks_completed,
+        total_earnings: agent.total_earnings,
+        category: agent.category,
+        skills: agent.skills,
+        bio: agent.bio,
+        last_seen: agent.agent_metadata.last_seen,
+        created_at: agent.created_at,
+        updated_at: agent.updated_at,
+      },
+    });
+  } catch (error) {
+    console.error('Federation agent get error:', error);
+    const isSupabaseError = error.message.includes('Supabase');
+    res.status(isSupabaseError ? 502 : 500).json({
+      error: isSupabaseError ? 'Bad Gateway' : 'Internal Server Error',
+      message: isSupabaseError ? error.message : 'Failed to retrieve agent',
+    });
+  }
+});
+
+/**
+ * @route   POST /api/v1/federation/heartbeat
+ * @desc    Agent sends heartbeat to update status and availability
+ * @access  Public (requires agent_id)
+ */
+router.post('/federation/heartbeat', async (req, res) => {
+  try {
+    const { agent_id, status, availability_status, capabilities } = req.body;
+
+    if (!agent_id) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Missing required field: agent_id',
+      });
+    }
+
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Missing required Supabase configuration',
+      });
+    }
+
+    const updates = {
+      agent_metadata: {
+        last_seen: new Date().toISOString(),
+      },
+    };
+
+    if (status) updates.status = status;
+    if (availability_status) updates.availability_status = availability_status;
+    if (capabilities) updates.agent_metadata.capabilities = capabilities;
+
+    const updatedAgent = await supabaseUpdateAgent(agent_id, updates);
+
+    console.log('Federation heartbeat:', agent_id);
+
+    res.status(200).json({
+      message: 'Heartbeat received',
+      agent: {
+        id: updatedAgent.id,
+        agent_id: updatedAgent.agent_id,
+        status: updatedAgent.status,
+        availability_status: updatedAgent.availability_status,
+        last_seen: updatedAgent.agent_metadata.last_seen,
+      },
+    });
+  } catch (error) {
+    console.error('Federation heartbeat error:', error);
+    const isSupabaseError = error.message.includes('Supabase');
+    res.status(isSupabaseError ? 502 : 500).json({
+      error: isSupabaseError ? 'Bad Gateway' : 'Internal Server Error',
+      message: isSupabaseError ? error.message : 'Failed to process heartbeat',
+    });
+  }
+});
+
 // Utility functions
 function generateUUID() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
