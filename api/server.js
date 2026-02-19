@@ -16,12 +16,20 @@ const rateLimit = require('express-rate-limit');
 const winston = require('winston');
 
 // Import routes
+const v1Routes = require('./routes/v1');
+const metricsRoutes = require('./routes/metrics');
+const authRoutes = require('./routes/auth');
+const skillsRoutes = require('./routes/skills');
+const teamRoutes = require('./routes/team');
 const enrollmentRoutes = require('./routes/enrollment');
 const agentRoutes = require('./routes/agents');
 const taskRoutes = require('./routes/tasks');
 const reputationRoutes = require('./routes/reputation');
 const qualityRoutes = require('./routes/quality');
 const economicRoutes = require('./routes/economics');
+
+// Services
+const { metricsService } = require('./services/metricsService');
 
 // Initialize Express app
 const app = express();
@@ -87,12 +95,29 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging middleware
 app.use((req, res, next) => {
-  logger.info({
-    method: req.method,
-    path: req.path,
-    ip: req.ip,
-    userAgent: req.get('user-agent')
+  const startTime = Date.now();
+
+  res.on('finish', () => {
+    const duration = Date.now() - startTime;
+    logger.info({
+      method: req.method,
+      path: req.path,
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+      statusCode: res.statusCode,
+      duration,
+    });
+
+    // Record metrics for API requests
+    if (req.path.startsWith('/v1/') || req.path.startsWith('/health')) {
+      metricsService.recordFederationRequest(
+        req.path.replace('/v1/', '').split('/')[0],
+        duration,
+        res.statusCode
+      );
+    }
   });
+
   next();
 });
 
@@ -110,6 +135,11 @@ app.get('/health', (req, res) => {
 });
 
 // API routes
+app.use('/v1', v1Routes);
+app.use('/v1/metrics', apiLimiter, metricsRoutes);
+app.use('/v1/auth', apiLimiter, authRoutes);
+app.use('/v1', apiLimiter, skillsRoutes);
+app.use('/v1', apiLimiter, teamRoutes);
 app.use('/v1/enroll', enrollmentLimiter, enrollmentRoutes);
 app.use('/v1/agents', apiLimiter, agentRoutes);
 app.use('/v1/tasks', apiLimiter, taskRoutes);
