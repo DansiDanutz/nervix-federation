@@ -1,0 +1,163 @@
+{
+  "dashboard": {
+    "title": "Nervix Federation Dashboard",
+    "uid": "nervix-main",
+    "tags": ["nervix", "production"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "API Requests (req/s)",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "rate(http_requests_total[1m])",
+            "legendFormat": "{{method}} {{path}}"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "API Error Rate",
+        "type": "graph",
+        "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "api:error_rate",
+            "legendFormat": "Error Rate"
+          }
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": { "params": [0.05], "type": "gt" },
+              "operator": { "type": "and" },
+              "query": { "params": ["A", "5m", "now"] },
+              "reducer": { "params": [], "type": "avg" },
+              "type": "query"
+            }
+          ],
+          "executionErrorState": "alerting",
+          "frequency": "1m",
+          "handler": 1,
+          "name": "Error Rate Alert",
+          "noDataState": "no_data",
+          "notifications": []
+        }
+      },
+      {
+        "id": 3,
+        "title": "API Latency (ms)",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, http_request_duration_seconds_bucket) * 1000",
+            "legendFormat": "P50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, http_request_duration_seconds_bucket) * 1000",
+            "legendFormat": "P95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, http_request_duration_seconds_bucket) * 1000",
+            "legendFormat": "P99"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Active Agents",
+        "type": "stat",
+        "gridPos": { "x": 12, "y": 8, "w": 12, "h": 4 },
+        "targets": [
+          {
+            "expr": "nervix_agents_connected",
+            "legendFormat": ""
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Task Queue Size",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "redis_db_keys{db=\"task-queue\"}",
+            "legendFormat": "Queue Size"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Task Completion Rate",
+        "type": "graph",
+        "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "rate(nervix_tasks_completed_total[5m])",
+            "legendFormat": "Completed"
+          },
+          {
+            "expr": "rate(nervix_tasks_failed_total[5m])",
+            "legendFormat": "Failed"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Memory Usage",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes / 1024 / 1024",
+            "legendFormat": "Heap Used (MB)"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "CPU Usage",
+        "type": "graph",
+        "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+            "legendFormat": "CPU %"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "System Health",
+        "type": "table",
+        "gridPos": { "x": 0, "y": 32, "w": 24, "h": 8 },
+        "targets": [
+          {
+            "expr": "up",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": { "Time": true },
+              "indexByName": {},
+              "renameByName": {
+                "Value": "Status",
+                "instance": "Instance",
+                "job": "Service"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

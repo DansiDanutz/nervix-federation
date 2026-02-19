@@ -1,0 +1,138 @@
+# Prometheus Alerting Rules for Nervix
+
+groups:
+  - name: nervix_alerts
+    interval: 30s
+    rules:
+      # API Availability
+      - alert: APIDown
+        expr: up{job="nervix-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nervix API is down"
+          description: "Nervix API has been down for more than 1 minute"
+
+      # High Error Rate
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value }} requests/sec (> 0.1 req/s)"
+
+      # High Latency
+      - alert: HighLatency
+        expr: histogram_quantile(0.99, http_request_duration_seconds_bucket) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency detected"
+          description: "P99 latency is {{ $value }}s (> 1s)"
+
+      # High Memory Usage
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Available memory is {{ $value | humanizePercentage }} (< 10%)"
+
+      # High CPU Usage
+      - alert: HighCPUUsage
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}% (> 80%)"
+
+      # Disk Space Low
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space low"
+          description: "Disk space on / is {{ $value | humanizePercentage }} (< 20%)"
+
+      # Redis Down
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis has been down for more than 1 minute"
+
+      # Task Queue Growing
+      - alert: TaskQueueGrowing
+        expr: rate(redis_db_keys{db="task-queue"}[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Task queue is growing"
+          description: "Task queue keys are increasing (rate: {{ $value }}/s)"
+
+      # Failed Tasks High
+      - alert: FailedTasksHigh
+        expr: rate(nervix_tasks_failed_total[5m]) / rate(nervix_tasks_total[5m]) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High task failure rate"
+          description: "Task failure rate is {{ $value | humanizePercentage }} (> 5%)"
+
+      # Agent Connection Drop
+      - alert: AgentConnectionDrop
+        expr: rate(nervix_agents_connected_total[5m]) < -0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent connections dropping"
+          description: "Agent connections are dropping (rate: {{ $value }}/s)"
+
+      # Database Connection Pool Exhausted
+      - alert: DatabasePoolExhausted
+        expr: pg_stat_activity_count / pg_settings_max_connections > 0.9
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection pool exhausted"
+          description: "Database connection pool is {{ $value | humanizePercentage }} full (> 90%)"
+
+  - name: nervix_performance
+    interval: 1m
+    rules:
+      # API Throughput
+      - record: api:requests_per_second
+        expr: rate(http_requests_total[1m])
+
+      # API Error Rate
+      - record: api:error_rate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])
+
+      # Task Completion Rate
+      - record: tasks:completion_rate
+        expr: rate(nervix_tasks_completed_total[5m]) / rate(nervix_tasks_total[5m])
+
+      # Average Task Duration
+      - record: tasks:avg_duration
+        expr: rate(nervix_task_duration_seconds_sum[5m]) / rate(nervix_task_duration_seconds_count[5m])
+
+      # Agent Success Rate
+      - record: agents:success_rate
+        expr: rate(nervix_agent_tasks_completed_total[5m]) / (rate(nervix_agent_tasks_completed_total[5m]) + rate(nervix_agent_tasks_failed_total[5m]))
