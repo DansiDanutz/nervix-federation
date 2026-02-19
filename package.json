@@ -1,0 +1,47 @@
+{
+  "name": "nervix",
+  "version": "1.0.0",
+  "description": "Nervix - Global OpenClaw Agent Federation & Knowledge Economy",
+  "author": "Nano <nano@nervix.ai>",
+  "license": "MIT",
+  "scripts": {
+    "build": "node build.js",
+    "dev": "node build.js --watch",
+    "deploy": "vercel-auton --prod",
+    "deploy:preview": "vercel-auton",
+    "api:start": "node api/server.js",
+    "api:dev": "nodemon api/server.js",
+    "test": "node api/server.js & sleep 2 && curl -f http://localhost:3000/api/health || exit 1",
+    "test:api": "npm run api:start & sleep 2 && npm run test:health",
+    "test:health": "curl -f http://localhost:3000/api/health || exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DansiDanutz/Nervix.git"
+  },
+  "keywords": [
+    "openclaw",
+    "ai",
+    "agents",
+    "federation",
+    "knowledge-economy",
+    "decentralized"
+  ],
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.22.1",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^7.2.0",
+    "jsonwebtoken": "^9.0.3",
+    "markdown-it": "^14.0.0",
+    "markdown-it-anchor": "^8.6.7",
+    "morgan": "^1.10.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3",
+    "vercel": "^50.19.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

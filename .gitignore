@@ -56,3 +56,4 @@ sessions/
 tmp/
 temp/
 .cache/
+.vercel
