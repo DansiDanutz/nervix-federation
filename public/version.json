@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0",
+  "buildDate": "2026-02-20T20:21:26.186Z",
+  "gitCommit": "b70576f",
+  "gitBranch": "main",
+  "deployment": "production",
+  "environment": "vercel",
+  "url": "https://nervix-federation.vercel.app",
+  "apiUrl": "https://api.nervix.ai"
+}

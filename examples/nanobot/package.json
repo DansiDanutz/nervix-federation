@@ -1,0 +1,27 @@
+{
+  "name": "nervix-nanobot",
+  "version": "1.0.0",
+  "description": "Nervix Federation Nanobot Polling Client",
+  "main": "client.js",
+  "type": "module",
+  "scripts": {
+    "start": "node client.js",
+    "dev": "node --watch client.js"
+  },
+  "keywords": [
+    "nervix",
+    "nanobot",
+    "agent",
+    "federation"
+  ],
+  "author": "Nervix Federation",
+  "license": "MIT",
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "uuid": "^9.0.1",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
