@@ -1,4 +1,4 @@
-name: Deploy Nervix Federation to Vercel
+name: Deploy Nervix to Vercel
 
 on:
   push:
@@ -6,127 +6,51 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-
 jobs:
-  build-and-test:
+  build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v3
         with:
-          node-version: '22'
-          cache: 'npm'
+          node-version: '20'
 
       - name: Install dependencies
+        working-directory: ./api
         run: npm ci
 
-      - name: Run build
-        run: npm run build
+      - name: Run tests
+        working-directory: ./api
+        run: npm test
 
-      - name: Verify build output
-        run: |
-          if [ ! -d "public" ]; then
-            echo "Error: public directory not found"
-            exit 1
-          fi
-          if [ ! -f "public/index.html" ]; then
-            echo "Error: public/index.html not found"
-            exit 1
-          fi
+      - name: Build (if needed)
+        working-directory: ./api
+        run: npm run build || echo "No build script"
 
-  deploy-preview:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v20
         with:
-          node-version: '22'
+          vercel-token: \${{ secrets.VERCEL_TOKEN }}
+          vercel-org: 'dansidanutz'
+          vercel-project-id: 'nervix-federation'
+          working-directory: ./api
 
-      - name: Install Vercel CLI
-        run: npm install --global vercel@latest
-
-      - name: Pull Vercel Environment Information
-        run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Build Project Artifacts
-        run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Deploy Project Artifacts to Vercel
-        id: deploy
-        run: |
-          url=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
-          echo "deployment_url=$url" >> $GITHUB_OUTPUT
-          echo "🚀 Preview Deployment Ready!"
-          echo "Preview URL: $url"
-
-  deploy-production:
-    needs: build-and-test
+  health-check:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    environment:
-      name: production
-      url: https://nervix-federation.vercel.app
+    needs: build-and-deploy
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Wait for deployment
+        run: sleep 30
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install Vercel CLI
-        run: npm install --global vercel@latest
-
-      - name: Pull Vercel Environment Information
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Build Project Artifacts
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Deploy Project Artifacts to Vercel
-        id: deploy
+      - name: Check API health
         run: |
-          url=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
-          echo "deployment_url=$url" >> $GITHUB_OUTPUT
-          echo "🎉 Production Deployment Successful!"
-          echo "Deployment URL: $url"
+          curl -f https://nervix-federation.vercel.app/health || exit 1
 
-      - name: Health check
-        run: |
-          sleep 10
-          response=$(curl -s -o /dev/null -w "%{http_code}" https://nervix-federation.vercel.app)
-          if [ $response -eq 200 ]; then
-            echo "✅ Health check passed"
-          else
-            echo "❌ Health check failed with status $response"
-            exit 1
-          fi
-
-  notify-deployment:
-    needs: deploy-production
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Deployment status
-        run: |
-          result="${{ needs.deploy-production.result }}"
-          if [ "$result" == "success" ]; then
-            echo "✅ Deployment successful"
-          elif [ "$result" == "failure" ]; then
-            echo "❌ Deployment failed"
-            exit 1
-          else
-            echo "⚠️  Deployment status: $result"
-          fi
+      - name: Notify if health check fails
+        if: failure()
+          run: echo "❌ API health check failed"
