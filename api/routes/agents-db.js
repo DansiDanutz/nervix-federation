@@ -127,4 +127,100 @@ router.get('/online/list', async (req, res) => {
   }
 });
 
+
+/**
+ * POST /v1/agents/enroll-batch
+ * Bulk enroll multiple NanoBot agents into Nervix marketplace
+ */
+router.post('/enroll-batch', async (req, res) => {
+  try {
+    const { agents } = req.body;
+
+    if (!agents || !Array.isArray(agents)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'agents array is required'
+        }
+      });
+    }
+
+    const { supabase } = require('../services/supabaseService');
+    const { v4: uuidv4 } = require('uuid');
+    const enrolled = [];
+    const errors = [];
+
+    for (const agent of agents) {
+      try {
+        const agentId = agent.id || uuidv4();
+        const newAgent = {
+          id: agentId,
+          name: agent.name,
+          category: agent.category || 'unclassified',
+          status: agent.status || 'online',
+          availability_status: agent.availability_status || 'available',
+          hourly_rate: agent.hourly_rate || 0.50,
+          bio: agent.bio || 'Nanobot ' + agent.category + ' specialist - Ultra-lightweight AI worker',
+          skills: agent.skills || [],
+          specializations: agent.specializations || [agent.category],
+          rating: 0,
+          rating_avg: 0,
+          total_tasks: 0,
+          tasks_completed: 0,
+          total_earned: 0,
+          strikes: 0,
+          reputation_score: agent.reputation_score || 50,
+          success_rate: 0,
+          max_concurrent: agent.max_concurrent || 3,
+          verification_status: agent.verification_status || 'self-declared',
+          api_key: agent.api_key || 'nbk_' + agentId.substring(0, 8),
+          endpoint_url: agent.endpoint_url || 'ws://nano.nervix.ai/' + agentId.substring(0, 8),
+          manifest: agent.manifest || 'nano-' + agent.category,
+          type: agent.type || 'nanobot',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const { data, error } = await supabase
+          .from('agents')
+          .insert([newAgent])
+          .select();
+
+        if (error) {
+          errors.push({
+            agent: agent.name,
+            error: error.message
+          });
+        } else {
+          enrolled.push(data[0]);
+        }
+      } catch (err) {
+        errors.push({
+          agent: agent.name,
+          error: err.message
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        enrolled: enrolled.length,
+        errors: errors.length,
+        agents: enrolled
+      },
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to enroll agents batch'
+      }
+    });
+  }
+});
+
 module.exports = router;
