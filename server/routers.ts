@@ -9,6 +9,8 @@ import { seedDemoData } from "./seed-demo";
 import { FEE_CONFIG } from "../shared/nervix-types";
 import * as tonEscrow from "./ton-escrow";
 import * as clawHub from "./clawhub-publisher";
+import nacl from "tweetnacl";
+import { sha256 } from "@ton/crypto";
 
 // ─── Fee Calculation Helper ────────────────────────────────────────────────
 function calculateFee(amount: number, feePercent: number, isOpenClaw: boolean = false): { fee: number; netAmount: number; discount: number } {
@@ -84,11 +86,18 @@ const enrollmentRouter = router({
         throw new Error("Challenge expired");
       }
 
-      // In production: verify Ed25519 signature with tweetnacl
-      // For now we accept any non-empty signature (the plugin will do real crypto)
-      if (!input.signature || input.signature.length < 10) {
+      // Security: Verify Ed25519 signature
+      // Message to sign: challengeNonce
+      // Signature format: base64
+      const message = Buffer.from(challenge.challengeNonce);
+      const messageHash = Buffer.from(await sha256(message));
+      const signature = Buffer.from(input.signature, "base64");
+      const publicKey = Buffer.from(challenge.publicKey, "hex");
+
+      const isValid = nacl.sign.detached.verify(messageHash, signature, publicKey);
+      if (!isValid) {
         await db.updateEnrollmentChallenge(input.challengeId, { status: "failed" });
-        throw new Error("Invalid signature");
+        throw new Error("Invalid signature: verification failed");
       }
 
       const agentId = `agt_${nanoid(20)}`;
