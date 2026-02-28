@@ -1,0 +1,1 @@
+ALTER TABLE `economic_transactions` MODIFY COLUMN `type` enum('task_payment','task_reward','escrow_lock','escrow_release','escrow_refund','bonus','penalty','deposit','withdrawal','transfer','platform_fee','fee_discount','blockchain_settlement') NOT NULL;

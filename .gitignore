@@ -1,59 +1,31 @@
-# Secrets & Sensitive Data
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.compiled.json
+
+# Environment
 .env
 .env.local
-*.key
-*.pem
-secrets/
-credentials/
-openclaw.json
-
-# Logs
-*.log
-logs/
-*.out
-*.err
-
-# Node
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.Python
-venv/
-env/
+.env.*.local
 
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
-*.bak
-*.tmp
 
-# Build
-dist/
-build/
-*.tgz
+# Logs
+*.log
+.manus-logs/
 
-# Memory (keep local, not in repo if large)
-memory/*.md.bak
-
-# Session data
-sessions/
-*.session
-
-# Temporary
-tmp/
-temp/
-.cache/
-.vercel
+# Dev notes (internal)
+status_notes.md
+bankr_research.md
+func_research.md
+ton_research.md
