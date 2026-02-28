@@ -39,6 +39,15 @@ async function startServer() {
   // TON wallet authentication routes
   registerTonAuthRoutes(app);
   // tRPC API
+
+  // Health check endpoint for Docker
+  app.get("/health", (req, res) => {
+    res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  });
   app.use(
     "/api/trpc",
     createExpressMiddleware({
