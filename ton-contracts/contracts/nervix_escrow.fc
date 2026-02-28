@@ -1,0 +1,538 @@
+;; ╔═══════════════════════════════════════════════════════════════╗
+;; ║          NERVIX ESCROW — TON FunC Smart Contract             ║
+;; ║                                                               ║
+;; ║  Holds funds in escrow for agent task payments.               ║
+;; ║  Supports: create, fund, release, refund, dispute.            ║
+;; ║  Fee tiers: task (2.5%), settlement (1.5%), transfer (1.0%)   ║
+;; ║  OpenClaw agents get 20% fee discount.                        ║
+;; ╚═══════════════════════════════════════════════════════════════╝
+
+#include "imports/stdlib.fc";
+
+;; ─── Op Codes (NVX1-NVX5 in hex) ───────────────────────────────
+const int op::create_escrow   = 0x4e565831;
+const int op::fund_escrow     = 0x4e565832;
+const int op::release_escrow  = 0x4e565833;
+const int op::refund_escrow   = 0x4e565834;
+const int op::dispute_escrow  = 0x4e565835;
+
+;; Admin ops
+const int op::pause           = 0x4e565840;
+const int op::unpause         = 0x4e565841;
+const int op::update_fees     = 0x4e565842;
+const int op::withdraw        = 0x4e565843;
+const int op::transfer_owner  = 0x4e565844;
+
+;; ─── Escrow Status Codes ────────────────────────────────────────
+const int status::created   = 0;
+const int status::funded    = 1;
+const int status::released  = 2;
+const int status::refunded  = 3;
+const int status::disputed  = 4;
+
+;; ─── Fee Type Codes ─────────────────────────────────────────────
+const int fee_type::task       = 0;
+const int fee_type::settlement = 1;
+const int fee_type::transfer   = 2;
+
+;; ─── Error Codes ────────────────────────────────────────────────
+const int error::not_owner              = 100;
+const int error::contract_paused        = 101;
+const int error::invalid_fee_type       = 102;
+const int error::invalid_amount         = 103;
+const int error::invalid_deadline       = 104;
+const int error::escrow_not_found       = 105;
+const int error::wrong_status           = 106;
+const int error::not_requester          = 107;
+const int error::not_assignee           = 108;
+const int error::deadline_not_passed    = 109;
+const int error::insufficient_funds     = 110;
+const int error::not_requester_or_owner = 111;
+
+;; ─── Default Fee BPS ────────────────────────────────────────────
+const int default_task_bps       = 250;  ;; 2.5%
+const int default_settlement_bps = 150;  ;; 1.5%
+const int default_transfer_bps   = 100;  ;; 1.0%
+const int default_discount_bps   = 2000; ;; 20% discount
+
+;; Min gas for operations (0.01 TON)
+const int min_gas = 10000000;
+
+;; ═══════════════════════════════════════════════════════════════
+;; STORAGE LAYOUT
+;; ═══════════════════════════════════════════════════════════════
+;;
+;; c4 cell:
+;;   owner_address:        MsgAddress (267 bits)
+;;   treasury_address:     MsgAddress (267 bits)
+;;   is_paused:            uint1
+;;   escrow_count:         uint32
+;;   task_fee_bps:         uint16
+;;   settlement_fee_bps:   uint16
+;;   transfer_fee_bps:     uint16
+;;   openclaw_discount_bps: uint16
+;;   total_fees_collected: coins (VarUInt 16)
+;;   escrows_dict:         dict (uint32 -> Cell)
+;;
+;; Escrow Cell:
+;;   status:            uint8
+;;   fee_type:          uint8
+;;   is_openclaw:       uint1
+;;   amount:            coins
+;;   funded_amount:     coins
+;;   fee_collected:     coins
+;;   created_at:        uint32
+;;   deadline:          uint32
+;;   requester_address: MsgAddress
+;;   assignee_address:  MsgAddress
+;;   task_hash:         uint256
+;; ═══════════════════════════════════════════════════════════════
+
+(slice, slice, int, int, int, int, int, int, int, cell) load_data() inline {
+    slice ds = get_data().begin_parse();
+    return (
+        ds~load_msg_addr(),       ;; owner
+        ds~load_msg_addr(),       ;; treasury
+        ds~load_uint(1),          ;; is_paused
+        ds~load_uint(32),         ;; escrow_count
+        ds~load_uint(16),         ;; task_fee_bps
+        ds~load_uint(16),         ;; settlement_fee_bps
+        ds~load_uint(16),         ;; transfer_fee_bps
+        ds~load_uint(16),         ;; openclaw_discount_bps
+        ds~load_coins(),          ;; total_fees_collected
+        ds~load_dict()            ;; escrows
+    );
+}
+
+() save_data(
+    slice owner, slice treasury, int is_paused, int escrow_count,
+    int task_bps, int settlement_bps, int transfer_bps, int discount_bps,
+    int total_fees, cell escrows
+) impure inline {
+    set_data(begin_cell()
+        .store_slice(owner)
+        .store_slice(treasury)
+        .store_uint(is_paused, 1)
+        .store_uint(escrow_count, 32)
+        .store_uint(task_bps, 16)
+        .store_uint(settlement_bps, 16)
+        .store_uint(transfer_bps, 16)
+        .store_uint(discount_bps, 16)
+        .store_coins(total_fees)
+        .store_dict(escrows)
+        .end_cell());
+}
+
+;; ─── Pack/Unpack Escrow Cell ────────────────────────────────────
+
+cell pack_escrow(
+    int status, int fee_type, int is_openclaw,
+    int amount, int funded_amount, int fee_collected,
+    int created_at, int deadline,
+    slice requester, slice assignee, int task_hash
+) inline {
+    return begin_cell()
+        .store_uint(status, 8)
+        .store_uint(fee_type, 8)
+        .store_uint(is_openclaw, 1)
+        .store_coins(amount)
+        .store_coins(funded_amount)
+        .store_coins(fee_collected)
+        .store_uint(created_at, 32)
+        .store_uint(deadline, 32)
+        .store_slice(requester)
+        .store_slice(assignee)
+        .store_uint(task_hash, 256)
+        .end_cell();
+}
+
+(int, int, int, int, int, int, int, int, slice, slice, int) unpack_escrow(cell c) inline {
+    slice es = c.begin_parse();
+    return (
+        es~load_uint(8),          ;; status
+        es~load_uint(8),          ;; fee_type
+        es~load_uint(1),          ;; is_openclaw
+        es~load_coins(),          ;; amount
+        es~load_coins(),          ;; funded_amount
+        es~load_coins(),          ;; fee_collected
+        es~load_uint(32),         ;; created_at
+        es~load_uint(32),         ;; deadline
+        es~load_msg_addr(),       ;; requester
+        es~load_msg_addr(),       ;; assignee
+        es~load_uint(256)         ;; task_hash
+    );
+}
+
+;; ─── Fee Calculation ────────────────────────────────────────────
+
+(int, int) calculate_fee(
+    int amount, int fee_bps, int discount_bps, int is_openclaw
+) inline {
+    int effective_bps = fee_bps;
+    if (is_openclaw) {
+        effective_bps = muldiv(fee_bps, 10000 - discount_bps, 10000);
+    }
+    int fee = muldiv(amount, effective_bps, 10000);
+    int payout = amount - fee;
+    return (fee, payout);
+}
+
+int get_fee_bps(int fee_type, int task_bps, int settlement_bps, int transfer_bps) inline {
+    if (fee_type == fee_type::task) { return task_bps; }
+    if (fee_type == fee_type::settlement) { return settlement_bps; }
+    if (fee_type == fee_type::transfer) { return transfer_bps; }
+    return task_bps;
+}
+
+;; ─── Helper: Send TON ───────────────────────────────────────────
+
+() send_ton(slice to_addr, int amount, int mode) impure inline {
+    cell msg = begin_cell()
+        .store_uint(0x10, 6)       ;; nobounce
+        .store_slice(to_addr)
+        .store_coins(amount)
+        .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+        .end_cell();
+    send_raw_message(msg, mode);
+}
+
+;; ─── Helper: Address Equality ───────────────────────────────────
+
+int equal_slices(slice a, slice b) asm "SDEQ";
+
+;; ═══════════════════════════════════════════════════════════════
+;; MAIN HANDLER
+;; ═══════════════════════════════════════════════════════════════
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    ;; Ignore empty messages (simple transfers)
+    if (in_msg_body.slice_empty?()) { return (); }
+
+    ;; Parse sender address
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+    if (flags & 1) { return (); } ;; ignore bounced
+    slice sender = cs~load_msg_addr();
+
+    ;; Parse op code and query_id
+    int op = in_msg_body~load_uint(32);
+    int query_id = in_msg_body~load_uint(64);
+
+    ;; Load contract state
+    var (owner, treasury, is_paused, escrow_count,
+         task_bps, settlement_bps, transfer_bps, discount_bps,
+         total_fees, escrows) = load_data();
+
+    ;; ─── ADMIN: Pause ───────────────────────────────────────────
+    if (op == op::pause) {
+        throw_unless(error::not_owner, equal_slices(sender, owner));
+        save_data(owner, treasury, 1, escrow_count,
+                  task_bps, settlement_bps, transfer_bps, discount_bps,
+                  total_fees, escrows);
+        return ();
+    }
+
+    ;; ─── ADMIN: Unpause ─────────────────────────────────────────
+    if (op == op::unpause) {
+        throw_unless(error::not_owner, equal_slices(sender, owner));
+        save_data(owner, treasury, 0, escrow_count,
+                  task_bps, settlement_bps, transfer_bps, discount_bps,
+                  total_fees, escrows);
+        return ();
+    }
+
+    ;; ─── ADMIN: Update Fees ─────────────────────────────────────
+    if (op == op::update_fees) {
+        throw_unless(error::not_owner, equal_slices(sender, owner));
+        int new_task_bps = in_msg_body~load_uint(16);
+        int new_settlement_bps = in_msg_body~load_uint(16);
+        int new_transfer_bps = in_msg_body~load_uint(16);
+        int new_discount_bps = in_msg_body~load_uint(16);
+        save_data(owner, treasury, is_paused, escrow_count,
+                  new_task_bps, new_settlement_bps, new_transfer_bps, new_discount_bps,
+                  total_fees, escrows);
+        return ();
+    }
+
+    ;; ─── ADMIN: Withdraw Treasury ───────────────────────────────
+    if (op == op::withdraw) {
+        throw_unless(error::not_owner, equal_slices(sender, owner));
+        int withdraw_amount = in_msg_body~load_coins();
+        send_ton(treasury, withdraw_amount, 1); ;; pay fees separately
+        return ();
+    }
+
+    ;; ─── ADMIN: Transfer Ownership ──────────────────────────────
+    if (op == op::transfer_owner) {
+        throw_unless(error::not_owner, equal_slices(sender, owner));
+        slice new_owner = in_msg_body~load_msg_addr();
+        save_data(new_owner, treasury, is_paused, escrow_count,
+                  task_bps, settlement_bps, transfer_bps, discount_bps,
+                  total_fees, escrows);
+        return ();
+    }
+
+    ;; All non-admin ops require contract to not be paused
+    throw_if(error::contract_paused, is_paused);
+
+    ;; ─── CREATE ESCROW ──────────────────────────────────────────
+    if (op == op::create_escrow) {
+        int fee_type = in_msg_body~load_uint(8);
+        throw_unless(error::invalid_fee_type, fee_type <= fee_type::transfer);
+
+        int amount = in_msg_body~load_coins();
+        throw_unless(error::invalid_amount, amount > 0);
+
+        int deadline = in_msg_body~load_uint(32);
+        throw_unless(error::invalid_deadline, deadline > now());
+
+        slice assignee = in_msg_body~load_msg_addr();
+        int task_hash = in_msg_body~load_uint(256);
+        int is_openclaw = in_msg_body~load_uint(1);
+
+        ;; Create escrow with status = created
+        int escrow_id = escrow_count;
+        cell escrow_cell = pack_escrow(
+            status::created, fee_type, is_openclaw,
+            amount, 0, 0,
+            now(), deadline,
+            sender, assignee, task_hash
+        );
+
+        escrows~udict_set_ref(32, escrow_id, escrow_cell);
+        escrow_count += 1;
+
+        save_data(owner, treasury, is_paused, escrow_count,
+                  task_bps, settlement_bps, transfer_bps, discount_bps,
+                  total_fees, escrows);
+        return ();
+    }
+
+    ;; ─── FUND ESCROW ────────────────────────────────────────────
+    if (op == op::fund_escrow) {
+        int escrow_id = in_msg_body~load_uint(32);
+
+        (cell escrow_cell, int found) = escrows.udict_get_ref?(32, escrow_id);
+        throw_unless(error::escrow_not_found, found);
+
+        var (e_status, e_fee_type, e_is_openclaw,
+             e_amount, e_funded, e_fee_collected,
+             e_created, e_deadline,
+             e_requester, e_assignee, e_task_hash) = unpack_escrow(escrow_cell);
+
+        throw_unless(error::wrong_status, e_status == status::created);
+        throw_unless(error::not_requester, equal_slices(sender, e_requester));
+
+        ;; msg_value minus gas reserve is the funding amount
+        int fund_amount = msg_value - min_gas;
+        throw_unless(error::insufficient_funds, fund_amount >= e_amount);
+
+        ;; Calculate fee
+        int fee_bps = get_fee_bps(e_fee_type, task_bps, settlement_bps, transfer_bps);
+        (int fee, int payout) = calculate_fee(e_amount, fee_bps, discount_bps, e_is_openclaw);
+
+        ;; Update escrow
+        cell new_escrow = pack_escrow(
+            status::funded, e_fee_type, e_is_openclaw,
+            e_amount, fund_amount, fee,
+            e_created, e_deadline,
+            e_requester, e_assignee, e_task_hash
+        );
+        escrows~udict_set_ref(32, escrow_id, new_escrow);
+
+        ;; Accumulate fees
+        total_fees += fee;
+
+        save_data(owner, treasury, is_paused, escrow_count,
+                  task_bps, settlement_bps, transfer_bps, discount_bps,
+                  total_fees, escrows);
+        return ();
+    }
+
+    ;; ─── RELEASE ESCROW ─────────────────────────────────────────
+    if (op == op::release_escrow) {
+        int escrow_id = in_msg_body~load_uint(32);
+
+        (cell escrow_cell, int found) = escrows.udict_get_ref?(32, escrow_id);
+        throw_unless(error::escrow_not_found, found);
+
+        var (e_status, e_fee_type, e_is_openclaw,
+             e_amount, e_funded, e_fee_collected,
+             e_created, e_deadline,
+             e_requester, e_assignee, e_task_hash) = unpack_escrow(escrow_cell);
+
+        throw_unless(error::wrong_status, e_status == status::funded);
+        ;; Only the requester (task creator) can release payment
+        throw_unless(error::not_requester, equal_slices(sender, e_requester));
+
+        ;; Calculate payout (amount minus fee)
+        int payout = e_amount - e_fee_collected;
+
+        ;; Send payout to assignee
+        send_ton(e_assignee, payout, 1);
+
+        ;; Send fee to treasury
+        if (e_fee_collected > 0) {
+            send_ton(treasury, e_fee_collected, 1);
+        }
+
+        ;; Update escrow status
+        cell new_escrow = pack_escrow(
+            status::released, e_fee_type, e_is_openclaw,
+            e_amount, e_funded, e_fee_collected,
+            e_created, e_deadline,
+            e_requester, e_assignee, e_task_hash
+        );
+        escrows~udict_set_ref(32, escrow_id, new_escrow);
+
+        save_data(owner, treasury, is_paused, escrow_count,
+                  task_bps, settlement_bps, transfer_bps, discount_bps,
+                  total_fees, escrows);
+        return ();
+    }
+
+    ;; ─── REFUND ESCROW ──────────────────────────────────────────
+    if (op == op::refund_escrow) {
+        int escrow_id = in_msg_body~load_uint(32);
+
+        (cell escrow_cell, int found) = escrows.udict_get_ref?(32, escrow_id);
+        throw_unless(error::escrow_not_found, found);
+
+        var (e_status, e_fee_type, e_is_openclaw,
+             e_amount, e_funded, e_fee_collected,
+             e_created, e_deadline,
+             e_requester, e_assignee, e_task_hash) = unpack_escrow(escrow_cell);
+
+        throw_unless(error::wrong_status, e_status == status::funded);
+
+        ;; Requester can refund after deadline, owner can refund anytime
+        int is_owner = equal_slices(sender, owner);
+        int is_requester = equal_slices(sender, e_requester);
+
+        if (is_requester) {
+            throw_unless(error::deadline_not_passed, now() > e_deadline);
+        } else {
+            throw_unless(error::not_requester_or_owner, is_owner);
+        }
+
+        ;; Refund full funded amount to requester (no fee on refund)
+        send_ton(e_requester, e_funded, 1);
+
+        ;; Reverse fee accumulation
+        total_fees -= e_fee_collected;
+
+        ;; Update escrow status
+        cell new_escrow = pack_escrow(
+            status::refunded, e_fee_type, e_is_openclaw,
+            e_amount, e_funded, 0,
+            e_created, e_deadline,
+            e_requester, e_assignee, e_task_hash
+        );
+        escrows~udict_set_ref(32, escrow_id, new_escrow);
+
+        save_data(owner, treasury, is_paused, escrow_count,
+                  task_bps, settlement_bps, transfer_bps, discount_bps,
+                  total_fees, escrows);
+        return ();
+    }
+
+    ;; ─── DISPUTE ESCROW ─────────────────────────────────────────
+    if (op == op::dispute_escrow) {
+        int escrow_id = in_msg_body~load_uint(32);
+
+        (cell escrow_cell, int found) = escrows.udict_get_ref?(32, escrow_id);
+        throw_unless(error::escrow_not_found, found);
+
+        var (e_status, e_fee_type, e_is_openclaw,
+             e_amount, e_funded, e_fee_collected,
+             e_created, e_deadline,
+             e_requester, e_assignee, e_task_hash) = unpack_escrow(escrow_cell);
+
+        throw_unless(error::wrong_status, e_status == status::funded);
+
+        ;; Either requester or assignee can dispute
+        int is_requester = equal_slices(sender, e_requester);
+        int is_assignee = equal_slices(sender, e_assignee);
+        throw_unless(error::not_requester_or_owner, is_requester | is_assignee);
+
+        ;; Mark as disputed — owner resolves manually
+        cell new_escrow = pack_escrow(
+            status::disputed, e_fee_type, e_is_openclaw,
+            e_amount, e_funded, e_fee_collected,
+            e_created, e_deadline,
+            e_requester, e_assignee, e_task_hash
+        );
+        escrows~udict_set_ref(32, escrow_id, new_escrow);
+
+        save_data(owner, treasury, is_paused, escrow_count,
+                  task_bps, settlement_bps, transfer_bps, discount_bps,
+                  total_fees, escrows);
+        return ();
+    }
+
+    ;; Unknown op — reject
+    throw(0xffff);
+}
+
+;; ═══════════════════════════════════════════════════════════════
+;; GET METHODS
+;; ═══════════════════════════════════════════════════════════════
+
+;; Returns: (is_paused, escrow_count, task_bps, settlement_bps,
+;;           transfer_bps, total_fees_collected, treasury_balance)
+(int, int, int, int, int, int, int) get_contract_info() method_id {
+    var (owner, treasury, is_paused, escrow_count,
+         task_bps, settlement_bps, transfer_bps, discount_bps,
+         total_fees, escrows) = load_data();
+
+    ;; Treasury balance = contract balance
+    int balance = get_balance().pair_first();
+
+    return (is_paused, escrow_count, task_bps, settlement_bps,
+            transfer_bps, total_fees, balance);
+}
+
+;; Returns: (status, fee_type, amount, funded_amount, fee_collected,
+;;           created_at, deadline, requester_address, assignee_address, task_hash)
+(int, int, int, int, int, int, int, slice, slice, int) get_escrow(int escrow_id) method_id {
+    var (owner, treasury, is_paused, escrow_count,
+         task_bps, settlement_bps, transfer_bps, discount_bps,
+         total_fees, escrows) = load_data();
+
+    (cell escrow_cell, int found) = escrows.udict_get_ref?(32, escrow_id);
+    throw_unless(error::escrow_not_found, found);
+
+    var (e_status, e_fee_type, e_is_openclaw,
+         e_amount, e_funded, e_fee_collected,
+         e_created, e_deadline,
+         e_requester, e_assignee, e_task_hash) = unpack_escrow(escrow_cell);
+
+    return (e_status, e_fee_type, e_amount, e_funded, e_fee_collected,
+            e_created, e_deadline, e_requester, e_assignee, e_task_hash);
+}
+
+;; Returns: (treasury_balance, total_fees_collected)
+(int, int) get_treasury_info() method_id {
+    var (owner, treasury, is_paused, escrow_count,
+         task_bps, settlement_bps, transfer_bps, discount_bps,
+         total_fees, escrows) = load_data();
+
+    int balance = get_balance().pair_first();
+    return (balance, total_fees);
+}
+
+;; Returns: owner address
+slice get_owner() method_id {
+    var (owner, treasury, is_paused, escrow_count,
+         task_bps, settlement_bps, transfer_bps, discount_bps,
+         total_fees, escrows) = load_data();
+    return owner;
+}
+
+;; Returns: discount BPS for OpenClaw
+int get_openclaw_discount() method_id {
+    var (owner, treasury, is_paused, escrow_count,
+         task_bps, settlement_bps, transfer_bps, discount_bps,
+         total_fees, escrows) = load_data();
+    return discount_bps;
+}

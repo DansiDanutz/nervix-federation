@@ -1,54 +1,12 @@
 {
   "version": "7",
-  "dialect": "mysql",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "5",
-      "when": 1771848657490,
-      "tag": "0000_tranquil_freak",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1771848860225,
-      "tag": "0001_dapper_sharon_ventura",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1771863543948,
-      "tag": "0002_warm_spitfire",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1772019013150,
-      "tag": "0003_lumpy_ozymandias",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1772037782077,
-      "tag": "0004_clear_cloak",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "5",
-      "when": 1772038386604,
-      "tag": "0005_lonely_stranger",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "5",
-      "when": 1772052767305,
-      "tag": "0006_chemical_bill_hollister",
+      "version": "7",
+      "when": 1772309477238,
+      "tag": "0000_nervix_v2_init",
       "breakpoints": true
     }
   ]

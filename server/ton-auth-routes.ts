@@ -4,13 +4,13 @@
  * Provides Express endpoints for:
  * - GET  /api/ton-auth/payload  → Generate a nonce for tonProof
  * - POST /api/ton-auth/verify   → Verify tonProof and create session
- * - POST /api/ton-auth/link     → Link wallet to existing Manus account
+ * - POST /api/ton-auth/link     → Link wallet to existing account
  */
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import type { Express, Request, Response } from "express";
 import { nanoid } from "nanoid";
 import { getSessionCookieOptions } from "./_core/cookies";
-import { sdk } from "./_core/sdk";
+import { createSessionToken, authenticateRequest } from "./_core/sdk";
 import * as db from "./db";
 import { generatePayload, verifyNonce, verifyTonProof, type TonProofPayload } from "./ton-proof";
 
@@ -91,7 +91,7 @@ export function registerTonAuthRoutes(app: Express) {
 
       if (!user) {
         // Create a new user with wallet-based identity
-        // Use wallet address as the openId (prefixed to distinguish from Manus OAuth users)
+        // Use wallet address as the openId (prefixed to distinguish from email users)
         const openId = `ton_${walletAddress}`;
         const shortAddr = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
 
@@ -139,8 +139,8 @@ export function registerTonAuthRoutes(app: Express) {
         console.warn("[TonAuth] Failed to auto-link wallet to agents:", err);
       }
 
-      // 5. Create session cookie (same mechanism as Manus OAuth)
-      const sessionToken = await sdk.createSessionToken(user.openId, {
+      // 5. Create session cookie
+      const sessionToken = await createSessionToken(user.openId, {
         name: user.name || "",
         expiresInMs: ONE_YEAR_MS,
       });
@@ -167,7 +167,7 @@ export function registerTonAuthRoutes(app: Express) {
   /**
    * POST /api/ton-auth/link
    * Links a TON wallet to an existing authenticated user account.
-   * Requires an active session (user must be logged in via Manus OAuth).
+   * Requires an active session (user must be logged in).
    * 
    * Body: TonProofPayload
    */
@@ -176,7 +176,7 @@ export function registerTonAuthRoutes(app: Express) {
       // Verify existing session
       let currentUser;
       try {
-        currentUser = await sdk.authenticateRequest(req);
+        currentUser = await authenticateRequest(req);
       } catch {
         res.status(401).json({ error: "Must be logged in to link wallet" });
         return;

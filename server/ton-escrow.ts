@@ -8,6 +8,12 @@
  */
 
 import { ENV } from "./_core/env";
+import { beginCell, Address } from "@ton/ton";
+
+// ─── Op Codes (must match nervix_escrow.fc) ─────────────────────
+const OP_CREATE_ESCROW = 0x4e565831;
+const OP_FUND_ESCROW = 0x4e565832;
+const OP_RELEASE_ESCROW = 0x4e565833;
 
 // ─── Contract Configuration ────────────────────────────────────
 // These will be set via environment variables after deployment
@@ -125,8 +131,8 @@ export function previewFee(
 }
 
 // ─── Generate TON Transaction Payload ──────────────────────────
-// These functions generate the message body that the frontend
-// sends via TON Connect to interact with the smart contract.
+// These functions generate the message body as base64-encoded BOC
+// that the frontend sends via TON Connect to the smart contract.
 
 export function generateCreateEscrowPayload(opts: {
   feeType: number;
@@ -134,25 +140,30 @@ export function generateCreateEscrowPayload(opts: {
   deadline: number;
   assigneeAddress: string;
   taskHash: string;
+  isOpenClaw?: boolean;
 }): {
   to: string;
   value: string;
   payload: string;
   description: string;
 } {
-  // The frontend will use TON Connect to send this transaction
-  // The payload is a base64-encoded BOC containing the message body
+  // Build real BOC message body matching nervix_escrow.fc layout
+  const taskHashBigInt = BigInt("0x" + opts.taskHash.replace(/^0x/, "").padStart(64, "0"));
+  const body = beginCell()
+    .storeUint(OP_CREATE_ESCROW, 32)
+    .storeUint(0, 64) // query_id
+    .storeUint(opts.feeType, 8)
+    .storeCoins(BigInt(opts.amountNano))
+    .storeUint(opts.deadline, 32)
+    .storeAddress(Address.parse(opts.assigneeAddress))
+    .storeUint(taskHashBigInt, 256)
+    .storeUint(opts.isOpenClaw ? 1 : 0, 1)
+    .endCell();
+
   return {
     to: ESCROW_CONTRACT_ADDRESS,
     value: "50000000", // 0.05 TON for gas
-    payload: JSON.stringify({
-      op: "0x4e565831",
-      feeType: opts.feeType,
-      amount: opts.amountNano,
-      deadline: opts.deadline,
-      assigneeAddress: opts.assigneeAddress,
-      taskHash: opts.taskHash,
-    }),
+    payload: body.toBoc().toString("base64"),
     description: `Create escrow for ${Number(BigInt(opts.amountNano)) / 1e9} TON`,
   };
 }
@@ -169,13 +180,16 @@ export function generateFundEscrowPayload(opts: {
   const gasBuffer = BigInt("15000000"); // 0.015 TON gas
   const totalValue = BigInt(opts.amountNano) + gasBuffer;
 
+  const body = beginCell()
+    .storeUint(OP_FUND_ESCROW, 32)
+    .storeUint(0, 64) // query_id
+    .storeUint(opts.escrowId, 32)
+    .endCell();
+
   return {
     to: ESCROW_CONTRACT_ADDRESS,
     value: totalValue.toString(),
-    payload: JSON.stringify({
-      op: "0x4e565832",
-      escrowId: opts.escrowId,
-    }),
+    payload: body.toBoc().toString("base64"),
     description: `Fund escrow #${opts.escrowId} with ${Number(BigInt(opts.amountNano)) / 1e9} TON`,
   };
 }
@@ -188,13 +202,16 @@ export function generateReleasePayload(opts: {
   payload: string;
   description: string;
 } {
+  const body = beginCell()
+    .storeUint(OP_RELEASE_ESCROW, 32)
+    .storeUint(0, 64) // query_id
+    .storeUint(opts.escrowId, 32)
+    .endCell();
+
   return {
     to: ESCROW_CONTRACT_ADDRESS,
     value: "50000000", // 0.05 TON for gas
-    payload: JSON.stringify({
-      op: "0x4e565833",
-      escrowId: opts.escrowId,
-    }),
+    payload: body.toBoc().toString("base64"),
     description: `Release payment for escrow #${opts.escrowId}`,
   };
 }

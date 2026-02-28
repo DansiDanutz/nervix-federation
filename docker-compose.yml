@@ -1,0 +1,23 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - OWNER_OPEN_ID=${OWNER_OPEN_ID}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - VITE_APP_ID=${VITE_APP_ID:-nervix}
+      - CLAWHUB_API_TOKEN=${CLAWHUB_API_TOKEN:-}
+      - BUILT_IN_FORGE_API_URL=${BUILT_IN_FORGE_API_URL:-}
+      - BUILT_IN_FORGE_API_KEY=${BUILT_IN_FORGE_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/trpc/federation.health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

@@ -6,13 +6,12 @@ import { Badge } from "@/components/ui/badge";
 import {
   Wallet, Shield, ArrowLeft, Zap, Globe, Lock, Users,
   ChevronRight, Loader2, Check, AlertCircle, Bot, Fingerprint,
-  Sparkles, ArrowRight
+  Sparkles, ArrowRight, Mail
 } from "lucide-react";
 import { useTonConnectUI, useTonWallet } from "@tonconnect/ui-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
-import { getLoginUrl } from "@/const";
 
 const CLAW_ICON_URL = "https://files.manuscdn.com/user_upload_by_module/session_file/111041160/iueFwHBwfKMltOnY.png";
 
@@ -293,9 +292,52 @@ function TelegramWalletCard({ onSuccess }: { onSuccess: () => void }) {
   );
 }
 
-// ─── Manus OAuth Login Card ─────────────────────────────────────────────
+// ─── Email Login Card ────────────────────────────────────────────────
 
-function ManusOAuthCard() {
+function EmailLoginCard({ onSuccess }: { onSuccess: () => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const utils = trpc.useUtils();
+
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    try {
+      const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
+      const body = mode === "register"
+        ? { email, password, name: name || undefined }
+        : { email, password };
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Authentication failed");
+      }
+
+      toast.success(mode === "register" ? "Account created!" : "Welcome back!", {
+        description: `Signed in as ${email}`,
+      });
+
+      await utils.auth.me.invalidate();
+      setTimeout(() => onSuccess(), 500);
+    } catch (err: any) {
+      setError(err.message || "Authentication failed");
+    } finally {
+      setLoading(false);
+    }
+  }, [mode, email, password, name, utils, onSuccess]);
+
   return (
     <motion.div
       initial={{ opacity: 0, x: 20 }}
@@ -309,11 +351,11 @@ function ManusOAuthCard() {
         <div className="space-y-2">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-claw-red/10 border border-claw-red/20 flex items-center justify-center">
-              <Shield className="w-6 h-6 text-claw-red-bright" />
+              <Mail className="w-6 h-6 text-claw-red-bright" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-foreground">Manus Account</h3>
-              <p className="text-xs text-muted-foreground">OAuth 2.0 Single Sign-On</p>
+              <h3 className="text-lg font-bold text-foreground">Email Account</h3>
+              <p className="text-xs text-muted-foreground">{mode === "login" ? "Sign in to your account" : "Create a new account"}</p>
             </div>
           </div>
         </div>
@@ -321,8 +363,8 @@ function ManusOAuthCard() {
         {/* Benefits */}
         <div className="grid grid-cols-2 gap-3">
           {[
-            { icon: Shield, label: "Secure OAuth 2.0", desc: "Industry standard" },
-            { icon: Globe, label: "Multi-Provider", desc: "Email, Google, Apple" },
+            { icon: Shield, label: "Secure Auth", desc: "JWT encrypted" },
+            { icon: Globe, label: "Full Access", desc: "All platform features" },
             { icon: Bot, label: "Agent Management", desc: "Full dashboard access" },
             { icon: Users, label: "Team Features", desc: "Collaboration tools" },
           ].map((b) => (
@@ -336,24 +378,71 @@ function ManusOAuthCard() {
           ))}
         </div>
 
-        {/* Login Button */}
-        <a href={getLoginUrl()} className="block">
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="space-y-3">
+          {mode === "register" && (
+            <input
+              type="text"
+              placeholder="Name (optional)"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl bg-background/60 border border-border/40 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-claw-red/30 focus:border-claw-red/40"
+            />
+          )}
+          <input
+            type="email"
+            placeholder="Email address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="w-full px-4 py-3 rounded-xl bg-background/60 border border-border/40 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-claw-red/30 focus:border-claw-red/40"
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            className="w-full px-4 py-3 rounded-xl bg-background/60 border border-border/40 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-claw-red/30 focus:border-claw-red/40"
+          />
+
           <Button
+            type="submit"
+            disabled={loading}
             className="w-full bg-claw-red hover:bg-claw-red-bright text-white gap-2 py-6 text-base font-semibold shadow-lg shadow-claw-red/20 transition-all hover:shadow-claw-red/30"
             size="lg"
           >
-            <Shield className="w-5 h-5" />
-            Login with Manus Account
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="w-5 h-5 animate-spin" /> {mode === "register" ? "Creating account..." : "Signing in..."}
+              </span>
+            ) : (
+              <span className="flex items-center gap-2">
+                <Mail className="w-5 h-5" /> {mode === "register" ? "Create Account" : "Sign In"}
+              </span>
+            )}
           </Button>
-        </a>
 
-        {/* Providers */}
-        <div className="flex items-center justify-center gap-6">
-          {["Email", "Google", "Apple", "GitHub"].map((provider) => (
-            <span key={provider} className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground transition-colors">
-              {provider}
-            </span>
-          ))}
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2"
+            >
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>{error}</span>
+            </motion.div>
+          )}
+        </form>
+
+        {/* Toggle mode */}
+        <div className="text-center">
+          <button
+            onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(null); }}
+            className="text-xs text-muted-foreground/60 hover:text-claw-red-bright transition-colors"
+          >
+            {mode === "login" ? "Don't have an account? Create one" : "Already have an account? Sign in"}
+          </button>
         </div>
       </div>
     </motion.div>
@@ -439,7 +528,7 @@ export default function Login() {
         {/* Login Cards — Side by Side */}
         <div className="max-w-4xl mx-auto grid md:grid-cols-2 gap-6 sm:gap-8 mb-12">
           <TelegramWalletCard onSuccess={handleWalletSuccess} />
-          <ManusOAuthCard />
+          <EmailLoginCard onSuccess={handleWalletSuccess} />
         </div>
 
         {/* Or Divider with Explore Option */}
