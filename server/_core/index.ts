@@ -8,6 +8,31 @@ import { registerTonAuthRoutes } from "../ton-auth-routes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import rateLimit from "express-rate-limit";
+import helmet from "helmet";
+import cors from "cors";
+
+// Security: Rate limiting to prevent DoS attacks
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: {
+    error: "Too many requests from this IP, please try again later.",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Stricter rate limiting for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 auth requests per windowMs
+  message: {
+    error: "Too many authentication attempts, please try again later.",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -31,16 +56,37 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
-  // OAuth callback under /api/oauth/callback
-  registerOAuthRoutes(app);
-  // TON wallet authentication routes
-  registerTonAuthRoutes(app);
-  // tRPC API
 
-  // Health check endpoint for Docker
+  // Security: CORS configuration
+  app.use(cors({
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:3000'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  }));
+
+  // Security: Helmet for security headers
+  app.use(helmet({
+    contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
+    crossOriginEmbedderPolicy: false,
+  }));
+
+  // Security: Rate limiting (apply to all routes)
+  app.use(limiter);
+
+  // Configure body parser with REDUCED size limit for security (was 50MB)
+  app.use(express.json({ limit: "10mb" }));
+  app.use(express.urlencoded({ limit: "10mb", extended: true }));
+
+  // OAuth callback under /api/oauth/callback - apply stricter rate limit
+  app.use("/api/oauth", authLimiter);
+  registerOAuthRoutes(app);
+
+  // TON wallet authentication routes - apply stricter rate limit
+  app.use("/api/ton-auth", authLimiter);
+  registerTonAuthRoutes(app);
+
+  // Health check endpoint for Docker (no rate limit)
   app.get("/health", (req, res) => {
     res.json({
       status: "ok",
@@ -48,6 +94,8 @@ async function startServer() {
       uptime: process.uptime()
     });
   });
+
+  // tRPC API
   app.use(
     "/api/trpc",
     createExpressMiddleware({
@@ -55,6 +103,7 @@ async function startServer() {
       createContext,
     })
   );
+
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
