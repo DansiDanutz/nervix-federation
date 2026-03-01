@@ -525,7 +525,6 @@ function BarterProposalModal({
                   className="flex-1 bg-claw-red text-white hover:bg-claw-red-bright"
                   onClick={() => {
                     proposeBarter.mutate({
-                      proposerAgentId,
                       responderAgentId: targetPkg.authorAgentId,
                       offeredPackageId: selectedOffer!,
                       requestedPackageId: packageId,

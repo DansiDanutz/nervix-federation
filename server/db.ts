@@ -177,7 +177,19 @@ export async function deleteAgent(agentId: string) {
 
 // ─── Enrollment Challenges ───────────────────────────────────────────────────
 export async function createEnrollmentChallenge(challenge: InsertEnrollmentChallenge) {
-  check(await getDb().from("enrollment_challenges").insert(challenge as any));
+  const row: Record<string, unknown> = {
+    challengeId: challenge.challengeId,
+    agentName: challenge.agentName,
+    publicKey: challenge.publicKey,
+    roles: challenge.roles,
+    challengeNonce: challenge.challengeNonce,
+    status: challenge.status || "pending",
+    expiresAt: challenge.expiresAt instanceof Date
+      ? challenge.expiresAt.toISOString()
+      : challenge.expiresAt,
+  };
+  if (challenge.ipAddress) row.ipAddress = challenge.ipAddress;
+  check(await getDb().from("enrollment_challenges").insert(row));
   return challenge;
 }
 
@@ -304,6 +316,33 @@ export async function getEconomicStats() {
 
 export const getEconomyStats = getEconomicStats;
 
+// Atomic credit transfer via Supabase RPC (P2-T2: Financial Transaction Safety)
+export async function atomicTransferCredits(params: {
+  fromAgentId: string;
+  toAgentId: string;
+  amount: string;
+  fee: string;
+  netAmount: string;
+  txId: string;
+  feeTxId: string;
+  memo?: string | null;
+  feeMemo?: string | null;
+}): Promise<{ success: boolean; newFromBalance: string; newToBalance: string; fee: string }> {
+  const { data, error } = await getDb().rpc("nervix_transfer_credits", {
+    p_from_agent_id: params.fromAgentId,
+    p_to_agent_id: params.toAgentId,
+    p_amount: params.amount,
+    p_fee: params.fee,
+    p_net_amount: params.netAmount,
+    p_tx_id: params.txId,
+    p_fee_tx_id: params.feeTxId,
+    p_memo: params.memo ?? null,
+    p_fee_memo: params.feeMemo ?? null,
+  });
+  if (error) throw new Error(error.message || "Atomic transfer failed");
+  return data as any;
+}
+
 export async function getTreasuryFees() {
   const { data } = await getDb()
     .from("economic_transactions")
@@ -353,7 +392,24 @@ export async function getAuditLog(filters?: { actorId?: string; eventType?: stri
 
 // ─── Agent Sessions ──────────────────────────────────────────────────────────
 export async function createAgentSession(session: InsertAgentSession) {
-  check(await getDb().from("agent_sessions").insert(session as any));
+  // Explicitly serialize dates to ISO strings for Supabase compatibility
+  const row: Record<string, unknown> = {
+    sessionId: session.sessionId,
+    agentId: session.agentId,
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    accessTokenExpiresAt: session.accessTokenExpiresAt instanceof Date
+      ? session.accessTokenExpiresAt.toISOString()
+      : session.accessTokenExpiresAt,
+    refreshTokenExpiresAt: session.refreshTokenExpiresAt instanceof Date
+      ? session.refreshTokenExpiresAt.toISOString()
+      : session.refreshTokenExpiresAt,
+    isRevoked: false,
+    lastUsedAt: new Date().toISOString(),
+  };
+  if (session.ipAddress) row.ipAddress = session.ipAddress;
+  if (session.userAgent) row.userAgent = session.userAgent;
+  check(await getDb().from("agent_sessions").insert(row));
   return session;
 }
 
@@ -364,6 +420,20 @@ export async function getAgentSession(sessionId: string) {
 
 export async function revokeAgentSession(sessionId: string) {
   check(await getDb().from("agent_sessions").update({ isRevoked: true } as any).eq("sessionId", sessionId));
+}
+
+export async function getAgentSessionByToken(accessToken: string) {
+  const { data } = await getDb()
+    .from("agent_sessions")
+    .select("*")
+    .eq("accessToken", accessToken)
+    .eq("isRevoked", false)
+    .limit(1);
+  return data && data.length > 0 ? data[0] : undefined;
+}
+
+export async function updateAgentSessionLastUsed(sessionId: string) {
+  await getDb().from("agent_sessions").update({ lastUsedAt: new Date().toISOString() } as any).eq("sessionId", sessionId);
 }
 
 // ─── Federation Config ───────────────────────────────────────────────────────

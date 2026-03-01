@@ -379,7 +379,6 @@ export default function AgentManage() {
     try {
       // Update Agent Card (description, webhookUrl, hostname, region, roles)
       await updateCardMutation.mutateAsync({
-        agentId,
         agentCard: {
           description,
           webhookUrl: webhookUrl || undefined,
@@ -390,7 +389,6 @@ export default function AgentManage() {
       });
       // Update capabilities
       await setCapsMutation.mutateAsync({
-        agentId,
         capabilities: capabilities.map(c => ({
           skillId: c.skillId,
           skillName: c.skillName,

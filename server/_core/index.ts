@@ -16,23 +16,12 @@ import { registerYouTubeRoutes } from "../youtube-routes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { startScheduledJobs } from "../scheduled-jobs";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
     const server = net.createServer();
-    // Auto-mark agents offline after 10min no heartbeat
-  setInterval(async () => {
-    try {
-      const { getDb } = await import("../db");
-      const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-      await getDb().from("agents").update({ status: "offline" }).eq("status", "active").lt("lastHeartbeat", tenMinAgo);
-    } catch(e) { /* ignore */ }
-  }, 5 * 60 * 1000);
-
-  // Sentry error handler (must be after all routes)
-  if (process.env.SENTRY_DSN) { app.use(Sentry.expressErrorHandler()); }
-
-  server.listen(port, () => {
+    server.listen(port, () => {
       server.close(() => resolve(true));
     });
     server.on("error", () => resolve(false));
@@ -51,9 +40,9 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Configure body parser with reduced size limit (security hardening)
+  app.use(express.json({ limit: "10mb" }));
+  app.use(express.urlencoded({ limit: "10mb", extended: true }));
   // Global API rate limiter
   app.use("/api", apiLimiter);
   // Auth routes (register + login)
@@ -86,14 +75,8 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  // Auto-mark agents offline after 10min no heartbeat
-  setInterval(async () => {
-    try {
-      const { getDb } = await import("../db");
-      const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-      await getDb().from("agents").update({ status: "offline" }).eq("status", "active").lt("lastHeartbeat", tenMinAgo);
-    } catch(e) { /* ignore */ }
-  }, 5 * 60 * 1000);
+  // Start all scheduled background jobs (heartbeat monitor, webhook retry, cleanup, etc.)
+  startScheduledJobs();
 
   // Sentry error handler (must be after all routes)
   if (process.env.SENTRY_DSN) { app.use(Sentry.expressErrorHandler()); }

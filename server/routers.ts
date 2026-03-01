@@ -3,7 +3,7 @@ import crypto from "crypto";
 import nacl from "tweetnacl";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
+import { publicProcedure, protectedProcedure, adminProcedure, agentProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import * as db from "./db";
@@ -178,20 +178,19 @@ const agentsRouter = router({
       return agent;
     }),
 
-  updateCard: publicProcedure
+  updateCard: agentProcedure
     .input(z.object({
-      agentId: z.string(),
       agentCard: z.record(z.string(), z.unknown()),
     }))
-    .mutation(async ({ input }) => {
-      const agent = await db.getAgentById(input.agentId);
+    .mutation(async ({ input, ctx }) => {
+      const agent = await db.getAgentById(ctx.agentId);
       if (!agent) throw new Error("Agent not found");
-      const updated = await db.updateAgent(input.agentId, { agentCard: input.agentCard });
+      const updated = await db.updateAgent(ctx.agentId, { agentCard: input.agentCard });
 
       await db.createAuditEntry({
         eventId: `evt_${nanoid(16)}`,
         eventType: "agent.card_updated",
-        actorId: input.agentId,
+        actorId: ctx.agentId,
         actorType: "agent",
         action: `Agent Card updated for ${agent.name}`,
       });
@@ -199,9 +198,8 @@ const agentsRouter = router({
       return updated;
     }),
 
-  heartbeat: publicProcedure
+  heartbeat: agentProcedure
     .input(z.object({
-      agentId: z.string(),
       latencyMs: z.number().int().min(0).optional(),
       cpuUsage: z.number().min(0).max(100).optional(),
       memoryUsage: z.number().min(0).max(100).optional(),
@@ -212,10 +210,10 @@ const agentsRouter = router({
       ipAddress: z.string().max(45).optional(),
       region: z.string().max(64).optional(),
       healthy: z.boolean().optional(),
-    }))
-    .mutation(async ({ input }) => {
-      const { agentId, ...metadata } = input;
-      await db.updateAgentHeartbeat(agentId, Object.keys(metadata).length > 0 ? metadata : undefined);
+    }).optional())
+    .mutation(async ({ input, ctx }) => {
+      const metadata = input;
+      await db.updateAgentHeartbeat(ctx.agentId, metadata && Object.keys(metadata).length > 0 ? metadata : undefined);
       return { ok: true, timestamp: new Date().toISOString() };
     }),
 
@@ -266,28 +264,27 @@ const agentsRouter = router({
       return db.getAgentCapabilities(input.agentId);
     }),
 
-  setCapabilities: publicProcedure
+  setCapabilities: agentProcedure
     .input(z.object({
-      agentId: z.string(),
       capabilities: z.array(z.object({
         skillId: z.string(),
         skillName: z.string(),
-        description: z.string().optional(),
+        description: z.string().max(2000).optional(),
         tags: z.array(z.string()).optional(),
         examples: z.array(z.string()).optional(),
         proficiencyLevel: z.enum(["beginner", "intermediate", "advanced", "expert"]).optional(),
       })),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const caps = input.capabilities.map(c => ({
         ...c,
-        agentId: input.agentId,
+        agentId: ctx.agentId,
         description: c.description ?? null,
         tags: c.tags ?? null,
         examples: c.examples ?? null,
         proficiencyLevel: c.proficiencyLevel ?? ("intermediate" as const),
       }));
-      await db.setAgentCapabilities(input.agentId, caps);
+      await db.setAgentCapabilities(ctx.agentId, caps);
       return { ok: true };
     }),
 
@@ -417,21 +414,21 @@ const agentsRouter = router({
 
 // ─── Tasks Router ───────────────────────────────────────────────────────────
 const tasksRouter = router({
-  create: publicProcedure
+  create: agentProcedure
     .input(z.object({
       title: z.string().min(1).max(512),
-      description: z.string().optional(),
+      description: z.string().max(5000).optional(),
       type: z.string().optional(),
       requiredRoles: z.array(z.string()).optional(),
       requiredSkills: z.array(z.string()).optional(),
-      requesterId: z.string(),
       priority: z.enum(PRIORITIES).optional(),
       creditReward: z.string().optional(),
       maxDuration: z.number().optional(),
       inputArtifacts: z.array(z.record(z.string(), z.unknown())).optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const taskId = `tsk_${nanoid(20)}`;
+      const requesterId = ctx.agentId;
 
       // Skill-aware task matching algorithm
       let assigneeId: string | undefined;
@@ -446,7 +443,7 @@ const tasksRouter = router({
         const scored: { agent: any; score: number; skillMatch: number; roleMatch: boolean; isOnline: boolean }[] = [];
 
         for (const a of candidates) {
-          if (a.agentId === input.requesterId) continue;
+          if (a.agentId === requesterId) continue;
           const hasCapacity = a.activeTasks < a.maxConcurrentTasks;
           if (!hasCapacity) continue;
 
@@ -510,7 +507,7 @@ const tasksRouter = router({
         type: input.type ?? null,
         requiredRoles: input.requiredRoles ?? null,
         requiredSkills: input.requiredSkills ?? null,
-        requesterId: input.requesterId,
+        requesterId,
         assigneeId: assigneeId ?? null,
         priority: input.priority ?? "medium",
         creditReward: input.creditReward ?? "10.000000",
@@ -529,7 +526,7 @@ const tasksRouter = router({
         await db.createA2AMessage({
           messageId: `msg_${nanoid(20)}`,
           method: "tasks/send",
-          fromAgentId: input.requesterId,
+          fromAgentId: requesterId,
           toAgentId: assigneeId,
           taskId,
           payload: { title: input.title, description: input.description, artifacts: input.inputArtifacts },
@@ -540,7 +537,7 @@ const tasksRouter = router({
       await db.createAuditEntry({
         eventId: `evt_${nanoid(16)}`,
         eventType: "task.created",
-        actorId: input.requesterId,
+        actorId: requesterId,
         actorType: "agent",
         action: `Task created: ${input.title}`,
         details: { taskId, assigneeId, priority: input.priority },
@@ -570,14 +567,13 @@ const tasksRouter = router({
       return task;
     }),
 
-  updateStatus: publicProcedure
+  updateStatus: agentProcedure
     .input(z.object({
       taskId: z.string(),
       status: z.enum(TASK_STATUSES),
-      agentId: z.string(),
-      errorMessage: z.string().optional(),
+      errorMessage: z.string().max(2000).optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const task = await db.getTaskById(input.taskId);
       if (!task) throw new Error("Task not found");
 
@@ -709,7 +705,7 @@ const tasksRouter = router({
       await db.createAuditEntry({
         eventId: `evt_${nanoid(16)}`,
         eventType: `task.${input.status}`,
-        actorId: input.agentId,
+        actorId: ctx.agentId,
         actorType: "agent",
         action: `Task ${input.status}: ${task.title}`,
         details: { taskId: input.taskId, status: input.status },
@@ -718,21 +714,20 @@ const tasksRouter = router({
       return updated;
     }),
 
-  submitResult: publicProcedure
+  submitResult: agentProcedure
     .input(z.object({
       taskId: z.string(),
-      agentId: z.string(),
       output: z.record(z.string(), z.unknown()).optional(),
       artifacts: z.array(z.record(z.string(), z.unknown())).optional(),
-      message: z.string().optional(),
+      message: z.string().max(5000).optional(),
       executionTimeMs: z.number().optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const resultId = `res_${nanoid(20)}`;
       await db.createTaskResult({
         resultId,
         taskId: input.taskId,
-        agentId: input.agentId,
+        agentId: ctx.agentId,
         output: input.output ?? null,
         artifacts: input.artifacts ?? null,
         message: input.message ?? null,
@@ -769,19 +764,21 @@ const economyRouter = router({
       return db.getAgentTransactions(input.agentId, input.limit);
     }),
 
-  transfer: publicProcedure
+  transfer: agentProcedure
     .input(z.object({
-      fromAgentId: z.string(),
       toAgentId: z.string(),
       amount: z.string(),
-      memo: z.string().optional(),
+      memo: z.string().max(500).optional(),
     }))
-    .mutation(async ({ input }) => {
-      const from = await db.getAgentById(input.fromAgentId);
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.agentId === input.toAgentId) throw new Error("Cannot transfer to yourself");
+
+      const from = await db.getAgentById(ctx.agentId);
       const to = await db.getAgentById(input.toAgentId);
       if (!from || !to) throw new Error("Agent not found");
 
       const amount = parseFloat(input.amount);
+      if (amount <= 0) throw new Error("Amount must be positive");
       const fromBalance = parseFloat(from.creditBalance as string);
       if (fromBalance < amount) throw new Error("Insufficient balance");
 
@@ -789,17 +786,54 @@ const economyRouter = router({
       const isFromOpenClaw = (from as any).source === "openclaw";
       const { fee, netAmount, discount } = calculateFee(amount, FEE_CONFIG.creditTransferFeePercent, isFromOpenClaw);
 
+      const txId = `tx_${nanoid(20)}`;
+      const feeTxId = `tx_fee_${nanoid(16)}`;
+      const feeMemo = fee > 0
+        ? `Platform fee (${FEE_CONFIG.creditTransferFeePercent}%)${discount > 0 ? ` — OpenClaw discount: ${discount.toFixed(6)} cr` : ""}`
+        : undefined;
+
+      // Attempt atomic RPC transfer (requires 002_atomic_transfer_rpc.sql deployed)
+      try {
+        const result = await db.atomicTransferCredits({
+          fromAgentId: ctx.agentId,
+          toAgentId: input.toAgentId,
+          amount: amount.toFixed(6),
+          fee: fee.toFixed(6),
+          netAmount: netAmount.toFixed(6),
+          txId,
+          feeTxId,
+          memo: input.memo ?? null,
+          feeMemo: feeMemo ?? null,
+        });
+
+        return {
+          transactionId: txId,
+          newFromBalance: result.newFromBalance,
+          newToBalance: result.newToBalance,
+          platformFee: fee.toFixed(6),
+          openClawDiscount: discount.toFixed(6),
+          feePercent: FEE_CONFIG.creditTransferFeePercent,
+        };
+      } catch (rpcErr: any) {
+        // Fallback: RPC not deployed yet — use non-atomic path
+        if (rpcErr.message?.includes("function") || rpcErr.message?.includes("does not exist")) {
+          console.warn("[economy.transfer] Atomic RPC not available, using fallback (deploy 002_atomic_transfer_rpc.sql)");
+        } else {
+          throw rpcErr; // Re-throw real errors (insufficient balance, agent not found, etc.)
+        }
+      }
+
+      // Non-atomic fallback (remove once RPC is deployed)
       const newFromBalance = fromBalance - amount;
       const newToBalance = parseFloat(to.creditBalance as string) + netAmount;
 
-      await db.updateAgent(input.fromAgentId, { creditBalance: newFromBalance.toFixed(6) });
+      await db.updateAgent(ctx.agentId, { creditBalance: newFromBalance.toFixed(6) });
       await db.updateAgent(input.toAgentId, { creditBalance: newToBalance.toFixed(6) });
 
-      const txId = `tx_${nanoid(20)}`;
       await db.createEconomicTransaction({
         transactionId: txId,
         type: "transfer",
-        fromAgentId: input.fromAgentId,
+        fromAgentId: ctx.agentId,
         toAgentId: input.toAgentId,
         amount: netAmount.toFixed(6),
         balanceAfterFrom: newFromBalance.toFixed(6),
@@ -807,17 +841,16 @@ const economyRouter = router({
         memo: input.memo ?? null,
       });
 
-      // Record the platform fee as a separate transaction
       if (fee > 0) {
         await db.createEconomicTransaction({
-          transactionId: `tx_fee_${nanoid(16)}`,
+          transactionId: feeTxId,
           type: "platform_fee",
-          fromAgentId: input.fromAgentId,
+          fromAgentId: ctx.agentId,
           toAgentId: "nervix_treasury",
           amount: fee.toFixed(6),
           balanceAfterFrom: newFromBalance.toFixed(6),
           balanceAfterTo: "0",
-          memo: `Platform fee (${FEE_CONFIG.creditTransferFeePercent}%)${discount > 0 ? ` — OpenClaw discount: ${discount.toFixed(6)} cr` : ""}`,
+          memo: feeMemo,
         });
       }
 
@@ -906,21 +939,20 @@ const federationRouter = router({
 
 // ─── A2A Protocol Router ────────────────────────────────────────────────────
 const a2aRouter = router({
-  send: publicProcedure
+  send: agentProcedure
     .input(z.object({
       method: z.string(),
-      fromAgentId: z.string().optional(),
-      toAgentId: z.string().optional(),
+      toAgentId: z.string(),
       taskId: z.string().optional(),
       payload: z.record(z.string(), z.unknown()),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const messageId = `msg_${nanoid(20)}`;
       await db.createA2AMessage({
         messageId,
         method: input.method,
-        fromAgentId: input.fromAgentId ?? null,
-        toAgentId: input.toAgentId ?? null,
+        fromAgentId: ctx.agentId,
+        toAgentId: input.toAgentId,
         taskId: input.taskId ?? null,
         payload: input.payload,
         status: "queued",
@@ -936,7 +968,7 @@ const a2aRouter = router({
               method: input.method,
               payload: input.payload,
               taskId: input.taskId ?? null,
-              fromAgentId: input.fromAgentId ?? null,
+              fromAgentId: ctx.agentId,
               toAgentId: input.toAgentId,
               timestamp: Date.now(),
             });
@@ -986,13 +1018,12 @@ const KNOWLEDGE_CATEGORIES = ["frontend", "backend", "blockchain", "devops", "se
 const PROFICIENCY_LEVELS = ["beginner", "intermediate", "advanced", "expert"] as const;
 
 const knowledgeRouter = router({
-  upload: publicProcedure
+  upload: agentProcedure
     .input(z.object({
       name: z.string().min(1).max(255),
       displayName: z.string().min(1).max(512),
       version: z.string().default("1.0.0"),
-      authorAgentId: z.string(),
-      description: z.string().optional(),
+      description: z.string().max(5000).optional(),
       category: z.string(),
       subcategory: z.string().optional(),
       proficiencyLevel: z.enum(PROFICIENCY_LEVELS).optional(),
@@ -1005,11 +1036,12 @@ const knowledgeRouter = router({
       testCount: z.number().min(0),
       storageUrl: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const packageId = `nkp_${nanoid(24)}`;
       await db.createKnowledgePackage({
         packageId,
         ...input,
+        authorAgentId: ctx.agentId,
         description: input.description ?? null,
         subcategory: input.subcategory ?? null,
         capabilities: input.capabilities ?? null,
@@ -1022,7 +1054,7 @@ const knowledgeRouter = router({
       await db.createAuditEntry({
         eventId: `evt_${nanoid(16)}`,
         eventType: "knowledge.uploaded",
-        actorId: input.authorAgentId,
+        actorId: ctx.agentId,
         actorType: "agent",
         action: `Knowledge package uploaded: ${input.displayName}`,
         details: { packageId, category: input.category, fileSize: input.fileSize },
@@ -1054,7 +1086,7 @@ const knowledgeRouter = router({
       return db.listKnowledgePackages(input);
     }),
 
-  audit: publicProcedure
+  audit: adminProcedure
     .input(z.object({ packageId: z.string() }))
     .mutation(async ({ input }) => {
       const pkg = await db.getKnowledgePackage(input.packageId);
@@ -1151,19 +1183,18 @@ const BARTER_MIN_FEE_TON = 0.02;
 const BARTER_FMV_TOLERANCE = 0.30; // 30% max difference
 
 const barterRouter = router({
-  propose: publicProcedure
+  propose: agentProcedure
     .input(z.object({
-      proposerAgentId: z.string(),
       responderAgentId: z.string(),
       offeredPackageId: z.string(),
       requestedPackageId: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       // Validate offered package is audited and approved
       const offeredPkg = await db.getKnowledgePackage(input.offeredPackageId);
       if (!offeredPkg) throw new Error("Offered package not found");
       if (offeredPkg.auditStatus !== "approved") throw new Error("Offered package must pass Nervix Audit before trading");
-      if (offeredPkg.authorAgentId !== input.proposerAgentId) throw new Error("Can only offer your own packages");
+      if (offeredPkg.authorAgentId !== ctx.agentId) throw new Error("Can only offer your own packages");
 
       const offeredAudit = await db.getAuditByPackage(input.offeredPackageId);
       if (!offeredAudit) throw new Error("Offered package has no audit record");
@@ -1196,7 +1227,7 @@ const barterRouter = router({
       const barterTxId = `btr_${nanoid(24)}`;
       await db.createBarterTransaction({
         barterTxId,
-        proposerAgentId: input.proposerAgentId,
+        proposerAgentId: ctx.agentId,
         responderAgentId: input.responderAgentId,
         offeredPackageId: input.offeredPackageId,
         requestedPackageId: input.requestedPackageId ?? null,
@@ -1215,7 +1246,7 @@ const barterRouter = router({
       await db.createAuditEntry({
         eventId: `evt_${nanoid(16)}`,
         eventType: "barter.proposed",
-        actorId: input.proposerAgentId,
+        actorId: ctx.agentId,
         actorType: "agent",
         action: `Barter proposed: ${offeredPkg.displayName}`,
         details: { barterTxId, offeredPackageId: input.offeredPackageId, requestedPackageId: input.requestedPackageId },
@@ -1232,17 +1263,16 @@ const barterRouter = router({
       };
     }),
 
-  accept: publicProcedure
+  accept: agentProcedure
     .input(z.object({
       barterTxId: z.string(),
-      responderAgentId: z.string(),
       counterPackageId: z.string().optional(),
       fairnessAcknowledged: z.boolean().default(false),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const tx = await db.getBarterTransaction(input.barterTxId);
       if (!tx) throw new Error("Barter transaction not found");
-      if (tx.responderAgentId !== input.responderAgentId) throw new Error("Not the responder");
+      if (tx.responderAgentId !== ctx.agentId) throw new Error("Not the responder");
       if (tx.status !== "proposed" && tx.status !== "countered") throw new Error("Cannot accept in current state");
 
       // If FMV difference > 30%, require explicit acknowledgment
@@ -1260,18 +1290,17 @@ const barterRouter = router({
       return { barterTxId: input.barterTxId, status: "accepted", nextStep: "fee_lock" };
     }),
 
-  confirmFeePaid: publicProcedure
+  confirmFeePaid: agentProcedure
     .input(z.object({
       barterTxId: z.string(),
-      agentId: z.string(),
       txHash: z.string(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const tx = await db.getBarterTransaction(input.barterTxId);
       if (!tx) throw new Error("Barter transaction not found");
 
-      const isProposer = tx.proposerAgentId === input.agentId;
-      const isResponder = tx.responderAgentId === input.agentId;
+      const isProposer = tx.proposerAgentId === ctx.agentId;
+      const isResponder = tx.responderAgentId === ctx.agentId;
       if (!isProposer && !isResponder) throw new Error("Not a party to this barter");
 
       const updates: any = {};
@@ -1296,18 +1325,17 @@ const barterRouter = router({
       };
     }),
 
-  complete: publicProcedure
+  complete: agentProcedure
     .input(z.object({
       barterTxId: z.string(),
-      agentId: z.string(),
       verified: z.boolean(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const tx = await db.getBarterTransaction(input.barterTxId);
       if (!tx) throw new Error("Barter transaction not found");
 
-      const isProposer = tx.proposerAgentId === input.agentId;
-      const isResponder = tx.responderAgentId === input.agentId;
+      const isProposer = tx.proposerAgentId === ctx.agentId;
+      const isResponder = tx.responderAgentId === ctx.agentId;
       if (!isProposer && !isResponder) throw new Error("Not a party to this barter");
 
       const updates: any = {};

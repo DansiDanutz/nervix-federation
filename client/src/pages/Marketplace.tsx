@@ -121,8 +121,8 @@ function CreateTaskForm({ onCreated }: { onCreated: () => void }) {
         </div>
         <div className="flex gap-3">
           <Button
-            onClick={() => createTask.mutate({ title, description, requiredRoles: selectedRoles, requesterId, priority: priority as any, creditReward: reward })}
-            disabled={!title || !requesterId || createTask.isPending}
+            onClick={() => createTask.mutate({ title, description, requiredRoles: selectedRoles, priority: priority as any, creditReward: reward })}
+            disabled={!title || createTask.isPending}
             className="bg-claw-red text-white hover:bg-claw-red-bright"
           >
             {createTask.isPending ? "Creating..." : "Create Task"}
