@@ -4,8 +4,11 @@ async function sendHeartbeat(config: any, apiUrl: string) {
   const url = `${apiUrl}/api/trpc/agents.heartbeat`;
   await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ json: { agentId: config.agentId, latencyMs: Math.floor(Math.random() * 50) + 10, healthy: true } }),
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${config.accessToken}`,
+    },
+    body: JSON.stringify({ json: { latencyMs: Math.floor(Math.random() * 50) + 10, healthy: true } }),
   }).catch(() => {});
 }
 

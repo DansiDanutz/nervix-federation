@@ -10,8 +10,11 @@ module.exports = async function complete(taskId: string, opts: any) {
   try {
     const res = await fetch(`${apiUrl}/api/trpc/tasks.submitResult`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ json: { taskId, agentId: config.agentId, resultData: { summary: result }, success: true } }),
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${config.accessToken}`,
+      },
+      body: JSON.stringify({ json: { taskId, resultData: { summary: result }, success: true } }),
     });
     const data = await res.json() as any;
     if (data.error) throw new Error(data.error.message);
