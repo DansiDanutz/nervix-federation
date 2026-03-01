@@ -43,3 +43,56 @@ export const adminProcedure = t.procedure.use(
     });
   }),
 );
+
+// Agent authentication middleware - validates Bearer token from agent_sessions
+const requireAgent = t.middleware(async opts => {
+  const { ctx, next } = opts;
+
+  const authHeader = ctx.req?.headers?.authorization;
+  if (!authHeader?.startsWith("Bearer at_")) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Missing or invalid agent token. Format: Bearer at_..."
+    });
+  }
+
+  const token = authHeader.slice(7); // Remove "Bearer " prefix
+
+  // Import here to avoid circular dependency
+  const db = await import("../db.js");
+  const session = await db.getAgentSessionByToken(token);
+
+  if (!session) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Invalid agent token"
+    });
+  }
+
+  if (session.isRevoked) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Agent token has been revoked"
+    });
+  }
+
+  if (new Date() > session.accessTokenExpiresAt) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Agent token has expired"
+    });
+  }
+
+  // Update last used timestamp for session activity tracking
+  await db.updateAgentSessionLastUsed(session.sessionId);
+
+  return next({
+    ctx: {
+      ...ctx,
+      agentId: session.agentId,
+      agentSession: session,
+    },
+  });
+});
+
+export const agentProcedure = t.procedure.use(requireAgent);

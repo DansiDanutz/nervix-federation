@@ -401,6 +401,24 @@ export async function revokeAgentSession(sessionId: string) {
   await db.update(agentSessions).set({ isRevoked: true }).where(eq(agentSessions.sessionId, sessionId));
 }
 
+export async function getAgentSessionByToken(accessToken: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(agentSessions)
+    .where(eq(agentSessions.accessToken, accessToken))
+    .limit(1);
+  return result[0];
+}
+
+export async function updateAgentSessionLastUsed(sessionId: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(agentSessions)
+    .set({ lastUsedAt: new Date() })
+    .where(eq(agentSessions.sessionId, sessionId));
+}
+
+
 // ─── Federation Config ──────────────────────────────────────────────────────
 export async function getFederationConfig(key: string) {
   const db = await getDb();

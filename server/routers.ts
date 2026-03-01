@@ -1,7 +1,7 @@
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { publicProcedure, protectedProcedure, agentProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import * as db from "./db";
@@ -164,12 +164,12 @@ const agentsRouter = router({
       return agent;
     }),
 
-  updateCard: publicProcedure
+  updateCard: agentProcedure
     .input(z.object({
       agentId: z.string(),
       agentCard: z.record(z.string(), z.unknown()),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const agent = await db.getAgentById(input.agentId);
       if (!agent) throw new Error("Agent not found");
       const updated = await db.updateAgent(input.agentId, { agentCard: input.agentCard });
@@ -252,7 +252,7 @@ const agentsRouter = router({
       return db.getAgentCapabilities(input.agentId);
     }),
 
-  setCapabilities: publicProcedure
+  setCapabilities: agentProcedure
     .input(z.object({
       agentId: z.string(),
       capabilities: z.array(z.object({
@@ -403,7 +403,7 @@ const agentsRouter = router({
 
 // ─── Tasks Router ───────────────────────────────────────────────────────────
 const tasksRouter = router({
-  create: publicProcedure
+  create: agentProcedure
     .input(z.object({
       title: z.string().min(1).max(512),
       description: z.string().optional(),
@@ -556,14 +556,14 @@ const tasksRouter = router({
       return task;
     }),
 
-  updateStatus: publicProcedure
+  updateStatus: agentProcedure
     .input(z.object({
       taskId: z.string(),
       status: z.enum(TASK_STATUSES),
       agentId: z.string(),
       errorMessage: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const task = await db.getTaskById(input.taskId);
       if (!task) throw new Error("Task not found");
 
@@ -755,14 +755,14 @@ const economyRouter = router({
       return db.getAgentTransactions(input.agentId, input.limit);
     }),
 
-  transfer: publicProcedure
+  transfer: agentProcedure
     .input(z.object({
       fromAgentId: z.string(),
       toAgentId: z.string(),
       amount: z.string(),
       memo: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const from = await db.getAgentById(input.fromAgentId);
       const to = await db.getAgentById(input.toAgentId);
       if (!from || !to) throw new Error("Agent not found");
@@ -892,7 +892,7 @@ const federationRouter = router({
 
 // ─── A2A Protocol Router ────────────────────────────────────────────────────
 const a2aRouter = router({
-  send: publicProcedure
+  send: agentProcedure
     .input(z.object({
       method: z.string(),
       fromAgentId: z.string().optional(),
@@ -900,7 +900,7 @@ const a2aRouter = router({
       taskId: z.string().optional(),
       payload: z.record(z.string(), z.unknown()),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const messageId = `msg_${nanoid(20)}`;
       await db.createA2AMessage({
         messageId,
@@ -937,7 +937,7 @@ const KNOWLEDGE_CATEGORIES = ["frontend", "backend", "blockchain", "devops", "se
 const PROFICIENCY_LEVELS = ["beginner", "intermediate", "advanced", "expert"] as const;
 
 const knowledgeRouter = router({
-  upload: publicProcedure
+  upload: agentProcedure
     .input(z.object({
       name: z.string().min(1).max(255),
       displayName: z.string().min(1).max(512),
