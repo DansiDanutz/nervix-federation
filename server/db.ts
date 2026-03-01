@@ -664,3 +664,101 @@ export async function getLeaderboardHistory(agentId: string, limit = 30) {
     .limit(limit);
   return data || [];
 }
+
+// ─── Subscriptions ────────────────────────────────────────────────────────────
+export async function getSubscription(userId: number) {
+  const { data } = await getDb().from("subscriptions").select("*").eq("user_id", userId).eq("status", "active").limit(1);
+  return data && data.length > 0 ? data[0] : null;
+}
+
+export async function createSubscription(userId: number, plan: string = "free") {
+  const limits: Record<string, { channels: number; videos: number }> = {
+    free: { channels: 1, videos: 50 },
+    pro: { channels: 5, videos: 500 },
+    business: { channels: 20, videos: 5000 },
+  };
+  const l = limits[plan] || limits.free;
+  check(await getDb().from("subscriptions").insert({
+    user_id: userId, plan, status: "active", max_channels: l.channels, max_videos_per_month: l.videos,
+  }));
+}
+
+export async function updateSubscription(userId: number, data: Record<string, unknown>) {
+  check(await getDb().from("subscriptions").update(data).eq("user_id", userId).eq("status", "active"));
+}
+
+// ─── YouTube Channels ─────────────────────────────────────────────────────────
+export async function createYouTubeChannel(channel: {
+  user_id: number; channel_id: string; channel_title?: string; channel_thumbnail?: string;
+  subscriber_count?: number; video_count?: number; view_count?: number;
+  access_token: string; refresh_token: string; token_expires_at: string; scopes?: string;
+}) {
+  check(await getDb().from("youtube_channels").upsert(channel, { onConflict: "user_id,channel_id" }));
+  return getYouTubeChannel(channel.user_id, channel.channel_id);
+}
+
+export async function getYouTubeChannel(userId: number, channelId: string) {
+  const { data } = await getDb().from("youtube_channels").select("*")
+    .eq("user_id", userId).eq("channel_id", channelId).limit(1);
+  return data && data.length > 0 ? data[0] : null;
+}
+
+export async function getYouTubeChannelById(id: string) {
+  const { data } = await getDb().from("youtube_channels").select("*").eq("id", id).limit(1);
+  return data && data.length > 0 ? data[0] : null;
+}
+
+export async function listYouTubeChannels(userId: number) {
+  const { data } = await getDb().from("youtube_channels").select("*")
+    .eq("user_id", userId).eq("is_active", true).order("created_at", { ascending: false });
+  return data || [];
+}
+
+export async function updateYouTubeChannel(id: string, updates: Record<string, unknown>) {
+  check(await getDb().from("youtube_channels").update(updates).eq("id", id));
+}
+
+export async function deleteYouTubeChannel(id: string) {
+  await getDb().from("youtube_channels").update({ is_active: false }).eq("id", id);
+}
+
+// ─── YouTube Videos ───────────────────────────────────────────────────────────
+export async function upsertYouTubeVideo(video: {
+  channel_id: string; user_id: number; video_id: string; title?: string; description?: string;
+  thumbnail_url?: string; status?: string; duration?: string;
+  view_count?: number; like_count?: number; comment_count?: number;
+  published_at?: string; tags?: string[]; category?: string; metadata?: unknown;
+}) {
+  check(await getDb().from("youtube_videos").upsert(video, { onConflict: "channel_id,video_id" }));
+}
+
+export async function listYouTubeVideos(userId: number, opts?: {
+  channelId?: string; status?: string; limit?: number; offset?: number;
+}) {
+  const limit = opts?.limit || 50;
+  const offset = opts?.offset || 0;
+  let query = getDb().from("youtube_videos").select("*", { count: "exact" }).eq("user_id", userId);
+  if (opts?.channelId) query = query.eq("channel_id", opts.channelId);
+  if (opts?.status) query = query.eq("status", opts.status);
+  query = (query as any).order("published_at", { ascending: false }).range(offset, offset + limit - 1);
+  const { data, count, error } = await query;
+  if (error) throw new Error(error.message);
+  return { videos: data || [], total: count || 0 };
+}
+
+export async function getYouTubeVideo(userId: number, videoId: string) {
+  const { data } = await getDb().from("youtube_videos").select("*")
+    .eq("user_id", userId).eq("video_id", videoId).limit(1);
+  return data && data.length > 0 ? data[0] : null;
+}
+
+export async function getYouTubeVideoStats(userId: number) {
+  const { data } = await getDb().from("youtube_videos").select("view_count,like_count,comment_count").eq("user_id", userId);
+  const videos = data || [];
+  return {
+    totalVideos: videos.length,
+    totalViews: videos.reduce((s: number, v: any) => s + (parseInt(v.view_count) || 0), 0),
+    totalLikes: videos.reduce((s: number, v: any) => s + (v.like_count || 0), 0),
+    totalComments: videos.reduce((s: number, v: any) => s + (v.comment_count || 0), 0),
+  };
+}

@@ -19,8 +19,12 @@ import Fleet from "./pages/Fleet";
 import Leaderboard from "./pages/Leaderboard";
 import AgentProfile from "./pages/AgentProfile";
 import Login from "./pages/Login";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
+import VerifyEmail from "./pages/VerifyEmail";
 import ClawHubPublish from "./pages/ClawHubPublish";
 import OnboardAgent from "./pages/OnboardAgent";
+import Admin from "./pages/Admin";
 import AgentManage from "./pages/AgentManage";
 import BulkOnboard from "./pages/BulkOnboard";
 import ChallengeVerify from "./pages/ChallengeVerify";
@@ -30,6 +34,9 @@ function Router() {
     <Switch>
       <Route path={"/"} component={Home} />
       <Route path={"/login"} component={Login} />
+      <Route path={"/forgot-password"} component={ForgotPassword} />
+      <Route path={"/reset-password"} component={ResetPassword} />
+      <Route path={"/verify-email"} component={VerifyEmail} />
       <Route path={"/dashboard"} component={Dashboard} />
       <Route path={"/agents"} component={AgentRegistry} />
       <Route path={"/agents/:agentId"} component={AgentDetail} />
@@ -44,6 +51,7 @@ function Router() {
       <Route path={"/leaderboard"} component={Leaderboard} />
       <Route path={"/clawhub"} component={ClawHubPublish} />
       <Route path={"/onboard"} component={OnboardAgent} />
+      <Route path={"/admin"} component={Admin} />
       <Route path={"/bulk-onboard"} component={BulkOnboard} />
       <Route path={"/verify"} component={ChallengeVerify} />
       <Route path={"/manage/:agentId"} component={AgentManage} />

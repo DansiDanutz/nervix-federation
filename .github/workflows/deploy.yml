@@ -1,0 +1,42 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Build & Deploy to Nano
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build
+        run: bun run build
+
+      - name: Deploy to server
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+        run: |
+          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          # Sync built files
+          rsync -avz --delete dist/ root@$SERVER_IP:/opt/nervix/dist/ \
+            -e "ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no"
+          # Restart PM2
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no root@$SERVER_IP \
+            "cd /opt/nervix && pm2 restart nervix --update-env"
+          # Health check
+          sleep 5
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no root@$SERVER_IP \
+            "curl -sf http://localhost:3000/api/trpc/federation.health | grep -q healthy && echo '✅ Deploy OK' || (echo '❌ Health check failed' && exit 1)"

@@ -115,24 +115,33 @@ const enrollmentRouter = router({
         verifiedAt: new Date(),
       });
 
-      await db.createAgent({
-        agentId,
-        name: challenge.agentName,
-        publicKey: challenge.publicKey,
-        roles: challenge.roles,
-        status: "active",
-      });
+      console.log(`[Enrollment] Creating agent: ${agentId}, name: ${challenge.agentName}`);
+      try {
+        await db.createAgent({
+          agentId,
+          name: challenge.agentName,
+          publicKey: challenge.publicKey,
+          roles: challenge.roles,
+          status: "active",
+        });
+      } catch(e: any) { console.error("[Enrollment] createAgent failed:", e.message, e); throw new Error("Failed to create agent: " + e.message); }
 
-      await db.getOrCreateReputation(agentId);
+      console.log(`[Enrollment] Creating reputation for: ${agentId}`);
+      try {
+        await db.getOrCreateReputation(agentId);
+      } catch(e: any) { console.error("[Enrollment] getOrCreateReputation failed:", e.message); /* non-fatal */ }
 
-      await db.createAgentSession({
-        sessionId,
-        agentId,
-        accessToken,
-        refreshToken,
-        accessTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
-        refreshTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      });
+      console.log(`[Enrollment] Creating session: ${sessionId}`);
+      try {
+        await db.createAgentSession({
+          sessionId,
+          agentId,
+          accessToken,
+          refreshToken,
+          accessTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          refreshTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        });
+      } catch(e: any) { console.error("[Enrollment] createAgentSession failed:", e.message, e); throw new Error("Failed to create session: " + e.message); }
 
       await db.createAuditEntry({
         eventId: `evt_${nanoid(16)}`,
@@ -2020,6 +2029,65 @@ export const appRouter = router({
       });
 
       return { success: true, created, audited, packages: results };
+    }),
+    // ─── Admin Management ─────────────────────────────────────────────────
+    stats: adminProcedure.query(async () => {
+      const [usersRes, agentsRes, tasksRes, activeAgentsRes, completedRes] = await Promise.all([
+        db.getDb().from("users").select("*", { count: "exact", head: true }),
+        db.getDb().from("agents").select("*", { count: "exact", head: true }),
+        db.getDb().from("tasks").select("*", { count: "exact", head: true }),
+        db.getDb().from("agents").select("*", { count: "exact", head: true }).eq("status", "active"),
+        db.getDb().from("tasks").select("*", { count: "exact", head: true }).eq("status", "completed"),
+      ]);
+      return {
+        totalUsers: usersRes.count || 0,
+        totalAgents: agentsRes.count || 0,
+        totalTasks: tasksRes.count || 0,
+        activeAgents: activeAgentsRes.count || 0,
+        completedTasks: completedRes.count || 0,
+      };
+    }),
+    users: router({
+      list: adminProcedure.input(z.object({ limit: z.number().default(50), offset: z.number().default(0), role: z.string().optional() }).optional()).query(async ({ input }) => {
+        let q = db.getDb().from("users").select("*").order("lastSignedIn", { ascending: false }).limit(input?.limit || 50).range(input?.offset || 0, (input?.offset || 0) + (input?.limit || 50) - 1);
+        if (input?.role) q = q.eq("role", input.role);
+        const { data } = await q;
+        return data || [];
+      }),
+      setRole: adminProcedure.input(z.object({ openId: z.string(), role: z.enum(["admin", "user"]) })).mutation(async ({ input }) => {
+        await db.getDb().from("users").update({ role: input.role }).eq("openId", input.openId);
+        return { success: true };
+      }),
+      delete: adminProcedure.input(z.object({ openId: z.string() })).mutation(async ({ input }) => {
+        await db.getDb().from("users").delete().eq("openId", input.openId);
+        return { success: true };
+      }),
+    }),
+    agentsMgmt: router({
+      setStatus: adminProcedure.input(z.object({ agentId: z.string(), status: z.string() })).mutation(async ({ input }) => {
+        await db.getDb().from("agents").update({ status: input.status }).eq("agentId", input.agentId);
+        return { success: true };
+      }),
+      delete: adminProcedure.input(z.object({ agentId: z.string() })).mutation(async ({ input }) => {
+        await db.getDb().from("agents").delete().eq("agentId", input.agentId);
+        return { success: true };
+      }),
+    }),
+    tasksMgmt: router({
+      list: adminProcedure.input(z.object({ limit: z.number().default(50), offset: z.number().default(0), status: z.string().optional() }).optional()).query(async ({ input }) => {
+        let q = db.getDb().from("tasks").select("*").order("createdAt", { ascending: false }).limit(input?.limit || 50);
+        if (input?.status) q = q.eq("status", input.status);
+        const { data } = await q;
+        return data || [];
+      }),
+      delete: adminProcedure.input(z.object({ taskId: z.string() })).mutation(async ({ input }) => {
+        await db.getDb().from("tasks").delete().eq("taskId", input.taskId);
+        return { success: true };
+      }),
+    }),
+    auditLog: adminProcedure.input(z.object({ limit: z.number().default(50), offset: z.number().default(0) }).optional()).query(async ({ input }) => {
+      const { data } = await db.getDb().from("audit_log").select("*").order("createdAt", { ascending: false }).limit(input?.limit || 50);
+      return data || [];
     }),
   }),
   // ─── ClawHub Publishing ──────────────────────────────────────────────────

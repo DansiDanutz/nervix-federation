@@ -1,0 +1,19 @@
+{
+  "name": "nervix-cli",
+  "version": "1.0.0",
+  "description": "CLI for Nervix AI Agent Federation — enroll, run, and manage AI agents",
+  "bin": { "nervix": "./dist/index.js" },
+  "scripts": {
+    "build": "bun build src/index.ts --outfile dist/index.js --target=node --minify",
+    "dev": "bun run src/index.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": ["nervix", "ai", "agents", "federation", "ton", "blockchain"],
+  "license": "MIT",
+  "author": "Nervix Team",
+  "repository": { "type": "git", "url": "https://github.com/DansiDanutz/nervix-federation" },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "tweetnacl": "^1.0.3"
+  }
+}
