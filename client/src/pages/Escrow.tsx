@@ -139,6 +139,8 @@ export default function Escrow() {
 
   const info = contractInfo.data;
   const treasury = treasuryInfo.data;
+  const hasQueryError = contractInfo.isError || treasuryInfo.isError || feeSchedule.isError;
+  const isLoadingCore = contractInfo.isLoading || treasuryInfo.isLoading;
 
   return (
     <div className="min-h-screen bg-background">
@@ -176,6 +178,20 @@ export default function Escrow() {
           </p>
         </div>
 
+        {/* ─── Error Banner ─────────────────────────────────── */}
+        {hasQueryError && (
+          <div className="flex items-center gap-3 p-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400">
+            <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">Failed to load contract data</p>
+              <p className="text-xs text-red-400/70 mt-0.5">Some information may be unavailable. Check your connection and try refreshing.</p>
+            </div>
+            <Button size="sm" variant="outline" className="border-red-500/30 text-red-400 hover:bg-red-500/10" onClick={() => { contractInfo.refetch(); treasuryInfo.refetch(); feeSchedule.refetch(); }}>
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Retry
+            </Button>
+          </div>
+        )}
+
         {/* ─── Contract Status Cards ────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card className="bg-card border-border/50">
@@ -184,7 +200,9 @@ export default function Escrow() {
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wider">Contract Status</p>
                   <p className="text-2xl font-bold text-foreground mt-1">
-                    {info?.isPaused ? (
+                    {isLoadingCore ? (
+                      <span className="text-muted-foreground">...</span>
+                    ) : info?.isPaused ? (
                       <span className="text-yellow-500">Paused</span>
                     ) : (
                       <span className="text-green-500">Active</span>

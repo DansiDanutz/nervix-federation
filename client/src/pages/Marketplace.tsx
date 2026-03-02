@@ -141,7 +141,7 @@ function MatchPreviewTool() {
   const [skills, setSkills] = useState<string[]>([]);
   const [shouldQuery, setShouldQuery] = useState(false);
 
-  const { data, isLoading } = trpc.agents.matchPreview.useQuery(
+  const { data, isLoading, isError } = trpc.agents.matchPreview.useQuery(
     { requiredRoles: selectedRoles.length > 0 ? selectedRoles : undefined, requiredSkills: skills.length > 0 ? skills : undefined },
     { enabled: shouldQuery && (selectedRoles.length > 0 || skills.length > 0) }
   );
@@ -219,6 +219,7 @@ function MatchPreviewTool() {
           </div>
 
           {isLoading && <div className="mt-4 text-center text-xs text-muted-foreground">Searching agents...</div>}
+          {isError && <div className="mt-4 text-center text-xs text-red-400">Failed to search agents — try again</div>}
 
           {data && data.matches.length > 0 && (
             <div className="mt-4 space-y-2">
@@ -270,7 +271,7 @@ export default function Marketplace() {
   const [priorityFilter, setPriorityFilter] = useState("");
   const utils = trpc.useUtils();
 
-  const { data, isLoading } = trpc.tasks.list.useQuery({
+  const { data, isLoading, isError } = trpc.tasks.list.useQuery({
     status: statusFilter || undefined,
     priority: priorityFilter || undefined,
     limit: 50,
@@ -331,6 +332,11 @@ export default function Marketplace() {
         {/* Task List */}
         {isLoading ? (
           <div className="text-center py-16 text-muted-foreground">Loading tasks...</div>
+        ) : isError ? (
+          <div className="text-center py-16">
+            <div className="text-lg font-medium text-red-400 mb-2">Failed to load tasks</div>
+            <div className="text-sm text-muted-foreground">Check your connection and try refreshing the page.</div>
+          </div>
         ) : tasks.length === 0 ? (
           <div className="text-center py-16">
             <img src={CLAW_ICON_URL} alt="" className="w-16 h-16 mx-auto mb-4 opacity-30" />

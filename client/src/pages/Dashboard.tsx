@@ -3,7 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { Link } from "wouter";
 import {
   Users, Activity, Zap, TrendingUp, BarChart3,
-  ChevronRight, RefreshCw, Bot, Cpu, Coins, Percent, Wallet, Send, Plus
+  ChevronRight, RefreshCw, Bot, Cpu, Coins, Percent, Wallet, Send, Plus, AlertTriangle
 } from "lucide-react";
 import { toast } from "sonner";
 import { TonWalletIndicator } from "@/components/TonWalletConnect";
@@ -50,8 +50,9 @@ function StatCard({ icon: Icon, label, value, sub, color = "text-claw-red" }: { 
 }
 
 function AgentList() {
-  const { data, isLoading } = trpc.agents.list.useQuery({ limit: 10 });
+  const { data, isLoading, isError } = trpc.agents.list.useQuery({ limit: 10 });
   if (isLoading) return <div className="text-sm text-muted-foreground p-4">Loading agents...</div>;
+  if (isError) return <div className="text-sm text-red-400 p-4 flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Failed to load agents</div>;
   const agents = data?.agents || [];
   return (
     <div className="rounded-xl border border-border/50 bg-card/60">
@@ -86,8 +87,9 @@ function AgentList() {
 }
 
 function TaskFeed() {
-  const { data, isLoading } = trpc.tasks.list.useQuery({ limit: 10 });
+  const { data, isLoading, isError } = trpc.tasks.list.useQuery({ limit: 10 });
   if (isLoading) return <div className="text-sm text-muted-foreground p-4">Loading tasks...</div>;
+  if (isError) return <div className="text-sm text-red-400 p-4 flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Failed to load tasks</div>;
   const tasks = data?.tasks || [];
   const statusColors: Record<string, string> = {
     created: "bg-blue-500/20 text-blue-400",
@@ -131,8 +133,9 @@ function TaskFeed() {
 }
 
 function ReputationLeaderboard() {
-  const { data, isLoading } = trpc.federation.reputationLeaderboard.useQuery({ limit: 10 });
+  const { data, isLoading, isError } = trpc.federation.reputationLeaderboard.useQuery({ limit: 10 });
   if (isLoading) return <div className="text-sm text-muted-foreground p-4">Loading leaderboard...</div>;
+  if (isError) return <div className="text-sm text-red-400 p-4 flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Failed to load leaderboard</div>;
   const scores = data || [];
   return (
     <div className="rounded-xl border border-border/50 bg-card/60">
@@ -207,8 +210,8 @@ function TreasuryCard() {
 
 export default function Dashboard() {
   useFederationSSE();
-  const { data: stats } = trpc.federation.stats.useQuery(undefined, { refetchInterval: 60000 });
-  const { data: health } = trpc.federation.health.useQuery(undefined, { refetchInterval: 60000 });
+  const { data: stats, isError: statsError } = trpc.federation.stats.useQuery(undefined, { refetchInterval: 60000 });
+  const { data: health, isError: healthError } = trpc.federation.health.useQuery(undefined, { refetchInterval: 60000 });
   const utils = trpc.useUtils();
   const seedMutation = trpc.admin.seedDemo.useMutation({
     onSuccess: (data) => {
@@ -234,6 +237,12 @@ export default function Dashboard() {
               <img src={CLAW_ICON_URL} alt="" className="w-7 h-7" /> Federation Dashboard
             </h1>
             <p className="text-sm text-muted-foreground">Real-time overview of the Nervix agent federation</p>
+            {(statsError || healthError) && (
+              <div className="flex items-center gap-2 mt-2 text-xs text-red-400">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Failed to load some data — retrying automatically
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             {isEmpty && (
