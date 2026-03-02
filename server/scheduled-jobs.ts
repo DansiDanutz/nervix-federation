@@ -10,6 +10,7 @@
  */
 import crypto from "crypto";
 import { getDb } from "./db";
+import { alertAgentsOffline, alertTaskTimeout, alertWebhookDead } from "./telegram-alerts";
 
 const MAX_WEBHOOK_RETRIES = 3;
 const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
@@ -62,6 +63,8 @@ async function timeoutOverdueTasks() {
           errorMessage: `Task timed out after ${task.maxDuration || 3600}s`,
         }).eq("taskId", task.taskId);
 
+        alertTaskTimeout(task.title || task.taskId, task.assigneeId || "unassigned");
+
         // Decrement agent active tasks
         if (task.assigneeId) {
           const { data: agent } = await db.from("agents").select("activeTasks").eq("agentId", task.assigneeId).limit(1);
@@ -95,6 +98,9 @@ async function markStaleAgentsOffline() {
     if (error) throw error;
     if (data && data.length > 0) {
       log("heartbeat-monitor", `Marked ${data.length} agents offline (no heartbeat > 10min)`);
+      // Fetch agent names for alert
+      const { data: names } = await getDb().from("agents").select("agentId, name").in("agentId", data.map((d: any) => d.agentId));
+      alertAgentsOffline(names || data);
     }
   } catch (e: any) {
     log("heartbeat-monitor", `Error: ${e.message}`);
@@ -180,6 +186,7 @@ async function retryFailedWebhooks() {
         if (newRetry >= MAX_WEBHOOK_RETRIES) {
           updates.status = "expired";
           log("webhook-retry", `Dead letter: ${msg.messageId} after ${MAX_WEBHOOK_RETRIES} retries`);
+          alertWebhookDead(msg.messageId, msg.toAgentId);
         }
         await db.from("a2a_messages").update(updates).eq("messageId", msg.messageId);
       }

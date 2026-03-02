@@ -12,6 +12,7 @@ import { FEE_CONFIG } from "../shared/nervix-types";
 import * as tonEscrow from "./ton-escrow";
 import * as clawHub from "./clawhub-publisher";
 import { broadcastEvent } from "./sse";
+import { alertLargeTransfer } from "./telegram-alerts";
 
 // ─── Fee Calculation Helper ────────────────────────────────────────────────
 function calculateFee(amount: number, feePercent: number, isOpenClaw: boolean = false): { fee: number; netAmount: number; discount: number } {
@@ -829,6 +830,7 @@ const economyRouter = router({
           feeMemo: feeMemo ?? null,
         });
 
+        if (amount >= 100) alertLargeTransfer(from.name || ctx.agentId, to.name || input.toAgentId, amount.toFixed(2));
         return {
           transactionId: txId,
           newFromBalance: result.newFromBalance,
