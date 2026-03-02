@@ -28,7 +28,11 @@ export async function deliverWebhook(
 ): Promise<boolean> {
   const agent = await db.getAgentById(toAgentId);
   if (!agent?.webhookUrl) {
-    // No webhook URL — leave as queued for manual pickup or retry job
+    // No webhook URL — mark as failed so it doesn't retry forever
+    await db.updateA2AMessage(messageId, {
+      status: "failed",
+      errorMessage: "Agent has no webhook URL configured",
+    });
     return false;
   }
 

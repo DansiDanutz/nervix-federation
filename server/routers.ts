@@ -660,66 +660,63 @@ const tasksRouter = router({
               maxDurationSec: task.maxDuration || 3600,
             });
           } catch (rpcErr: any) {
-            // Fallback: RPC not deployed yet — use non-atomic path
-            if (rpcErr.message?.includes("function") || rpcErr.message?.includes("does not exist") || rpcErr.message?.includes("schema cache")) {
-              console.warn("[tasks.updateStatus] Atomic RPC not available, using fallback (deploy 003_atomic_task_completion.sql)");
+            // Fallback: RPC not available or has errors — use non-atomic path
+            console.warn(`[tasks.updateStatus] Atomic RPC failed (${rpcErr.message?.slice(0, 80)}), using fallback`);
 
-              const newAssigneeBalance = parseFloat(assignee.creditBalance as string) + netReward;
-              const newRequesterBalance = parseFloat(requester.creditBalance as string) - reward;
+            const newAssigneeBalance = parseFloat(assignee.creditBalance as string) + netReward;
+            const newRequesterBalance = parseFloat(requester.creditBalance as string) - reward;
 
-              await db.updateAgent(task.assigneeId, {
-                creditBalance: newAssigneeBalance.toFixed(6),
-                totalTasksCompleted: assignee.totalTasksCompleted + 1,
-                totalCreditsEarned: (parseFloat(assignee.totalCreditsEarned as string) + netReward).toFixed(6),
-                activeTasks: Math.max(0, assignee.activeTasks - 1),
-              });
+            await db.updateAgent(task.assigneeId, {
+              creditBalance: newAssigneeBalance as any,
+              totalTasksCompleted: assignee.totalTasksCompleted + 1,
+              totalCreditsEarned: (parseFloat(assignee.totalCreditsEarned as string) + netReward) as any,
+              activeTasks: Math.max(0, assignee.activeTasks - 1),
+            });
 
-              await db.updateAgent(task.requesterId, {
-                totalCreditsSpent: (parseFloat(requester.totalCreditsSpent as string) + reward).toFixed(6),
-              });
+            await db.updateAgent(task.requesterId, {
+              creditBalance: newRequesterBalance as any,
+              totalCreditsSpent: (parseFloat(requester.totalCreditsSpent as string) + reward) as any,
+            });
 
+            await db.createEconomicTransaction({
+              transactionId: txId,
+              type: "task_reward",
+              fromAgentId: task.requesterId,
+              toAgentId: task.assigneeId,
+              taskId: input.taskId,
+              amount: netReward as any,
+              balanceAfterFrom: newRequesterBalance as any,
+              balanceAfterTo: newAssigneeBalance as any,
+              memo: `Reward for task: ${task.title} (after ${FEE_CONFIG.taskPaymentFeePercent}% platform fee)`,
+            });
+
+            if (taskFee > 0) {
               await db.createEconomicTransaction({
-                transactionId: txId,
-                type: "task_reward",
+                transactionId: feeTxId,
+                type: "platform_fee",
                 fromAgentId: task.requesterId,
-                toAgentId: task.assigneeId,
+                toAgentId: "nervix_treasury",
                 taskId: input.taskId,
-                amount: netReward.toFixed(6),
-                balanceAfterFrom: newRequesterBalance.toFixed(6),
-                balanceAfterTo: newAssigneeBalance.toFixed(6),
-                memo: `Reward for task: ${task.title} (after ${FEE_CONFIG.taskPaymentFeePercent}% platform fee)`,
+                amount: taskFee as any,
+                balanceAfterFrom: newRequesterBalance as any,
+                balanceAfterTo: 0 as any,
+                memo: `Task fee (${FEE_CONFIG.taskPaymentFeePercent}%)${taskDiscount > 0 ? ` — OpenClaw discount: ${taskDiscount.toFixed(6)} cr` : ""}`,
               });
-
-              if (taskFee > 0) {
-                await db.createEconomicTransaction({
-                  transactionId: feeTxId,
-                  type: "platform_fee",
-                  fromAgentId: task.requesterId,
-                  toAgentId: "nervix_treasury",
-                  taskId: input.taskId,
-                  amount: taskFee.toFixed(6),
-                  balanceAfterFrom: newRequesterBalance.toFixed(6),
-                  balanceAfterTo: "0",
-                  memo: `Task fee (${FEE_CONFIG.taskPaymentFeePercent}%)${taskDiscount > 0 ? ` — OpenClaw discount: ${taskDiscount.toFixed(6)} cr` : ""}`,
-                });
-              }
-
-              // Update reputation (non-atomic fallback)
-              const rep = await db.getOrCreateReputation(task.assigneeId);
-              const timeScore = Math.max(0, 1 - (completionTime / (task.maxDuration || 3600)));
-              const uptimeScore = parseFloat(rep.uptimeConsistency as string) || 0.9;
-              const newOverall = (1.0 * 0.4) + (timeScore * 0.25) + (0.8 * 0.25) + (uptimeScore * 0.1);
-
-              await db.updateReputation(task.assigneeId, {
-                overallScore: newOverall.toFixed(4),
-                successRate: ((parseFloat(rep.successRate as string) * rep.totalTasksScored + 1) / (rep.totalTasksScored + 1)).toFixed(4),
-                avgResponseTime: ((parseFloat(rep.avgResponseTime as string) * rep.totalTasksScored + completionTime) / (rep.totalTasksScored + 1)).toFixed(2),
-                totalTasksScored: rep.totalTasksScored + 1,
-                lastCalculated: new Date(),
-              });
-            } else {
-              throw rpcErr; // Re-throw real errors
             }
+
+            // Update reputation (non-atomic fallback)
+            const rep = await db.getOrCreateReputation(task.assigneeId);
+            const timeScore = Math.max(0, 1 - (completionTime / (task.maxDuration || 3600)));
+            const uptimeScore = parseFloat(rep.uptimeConsistency as string) || 0.9;
+            const newOverall = (1.0 * 0.4) + (timeScore * 0.25) + (0.8 * 0.25) + (uptimeScore * 0.1);
+
+            await db.updateReputation(task.assigneeId, {
+              overallScore: newOverall.toFixed(4),
+              successRate: ((parseFloat(rep.successRate as string) * rep.totalTasksScored + 1) / (rep.totalTasksScored + 1)).toFixed(4),
+              avgResponseTime: ((parseFloat(rep.avgResponseTime as string) * rep.totalTasksScored + completionTime) / (rep.totalTasksScored + 1)).toFixed(2),
+              totalTasksScored: rep.totalTasksScored + 1,
+              lastCalculated: new Date(),
+            });
           }
         }
       }
@@ -887,17 +884,17 @@ const economyRouter = router({
       const newFromBalance = fromBalance - amount;
       const newToBalance = parseFloat(to.creditBalance as string) + netAmount;
 
-      await db.updateAgent(ctx.agentId, { creditBalance: newFromBalance.toFixed(6) });
-      await db.updateAgent(input.toAgentId, { creditBalance: newToBalance.toFixed(6) });
+      await db.updateAgent(ctx.agentId, { creditBalance: newFromBalance as any });
+      await db.updateAgent(input.toAgentId, { creditBalance: newToBalance as any });
 
       await db.createEconomicTransaction({
         transactionId: txId,
         type: "transfer",
         fromAgentId: ctx.agentId,
         toAgentId: input.toAgentId,
-        amount: netAmount.toFixed(6),
-        balanceAfterFrom: newFromBalance.toFixed(6),
-        balanceAfterTo: newToBalance.toFixed(6),
+        amount: netAmount as any,
+        balanceAfterFrom: newFromBalance as any,
+        balanceAfterTo: newToBalance as any,
         memo: input.memo ?? null,
       });
 
@@ -907,9 +904,9 @@ const economyRouter = router({
           type: "platform_fee",
           fromAgentId: ctx.agentId,
           toAgentId: "nervix_treasury",
-          amount: fee.toFixed(6),
-          balanceAfterFrom: newFromBalance.toFixed(6),
-          balanceAfterTo: "0",
+          amount: fee as any,
+          balanceAfterFrom: newFromBalance as any,
+          balanceAfterTo: 0 as any,
           memo: feeMemo,
         });
       }
