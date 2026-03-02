@@ -13,6 +13,7 @@ let httpErrorsTotal = 0;
 
 export function incrementRequests() { httpRequestsTotal++; }
 export function incrementErrors() { httpErrorsTotal++; }
+export function getMetricCounters() { return { httpRequestsTotal, httpErrorsTotal, uptimeSeconds: Math.floor((Date.now() - startTime) / 1000) }; }
 
 function metric(name: string, help: string, type: string, value: number | string, labels?: Record<string, string>): string {
   const labelStr = labels

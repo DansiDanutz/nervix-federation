@@ -13,6 +13,7 @@ import * as tonEscrow from "./ton-escrow";
 import * as clawHub from "./clawhub-publisher";
 import { broadcastEvent } from "./sse";
 import { alertLargeTransfer } from "./telegram-alerts";
+import { getMetricCounters } from "./metrics";
 
 // ─── Fee Calculation Helper ────────────────────────────────────────────────
 function calculateFee(amount: number, feePercent: number, isOpenClaw: boolean = false): { fee: number; netAmount: number; discount: number } {
@@ -2084,6 +2085,54 @@ export const appRouter = router({
 
       return { success: true, created, audited, packages: results };
     }),
+    // ─── System Health ────────────────────────────────────────────────────
+    systemHealth: adminProcedure.query(async () => {
+      const d = db.getDb();
+      const counters = getMetricCounters();
+
+      // Agent status breakdown
+      const { data: agents } = await d.from("agents").select("agentId, name, status, lastHeartbeat, activeTasks");
+      const agentsByStatus: Record<string, number> = {};
+      const heartbeats: { name: string; agentId: string; ageSeconds: number; status: string }[] = [];
+      for (const a of agents || []) {
+        agentsByStatus[a.status] = (agentsByStatus[a.status] || 0) + 1;
+        const age = a.lastHeartbeat ? Math.floor((Date.now() - new Date(a.lastHeartbeat).getTime()) / 1000) : -1;
+        heartbeats.push({ name: a.name, agentId: a.agentId, ageSeconds: age, status: a.status });
+      }
+
+      // Task status breakdown
+      const { data: tasks } = await d.from("tasks").select("status");
+      const tasksByStatus: Record<string, number> = {};
+      for (const t of tasks || []) {
+        tasksByStatus[t.status] = (tasksByStatus[t.status] || 0) + 1;
+      }
+
+      // Webhook delivery stats
+      const { data: msgs } = await d.from("a2a_messages").select("status");
+      const webhooksByStatus: Record<string, number> = {};
+      for (const m of msgs || []) {
+        webhooksByStatus[m.status] = (webhooksByStatus[m.status] || 0) + 1;
+      }
+
+      // Recent errors (last 24h)
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { count: recentErrors } = await d.from("a2a_messages").select("*", { count: "exact", head: true }).eq("status", "failed").gt("createdAt", dayAgo);
+
+      return {
+        server: {
+          status: "healthy" as const,
+          uptimeSeconds: counters.uptimeSeconds,
+          httpRequests: counters.httpRequestsTotal,
+          httpErrors: counters.httpErrorsTotal,
+          errorRate: counters.httpRequestsTotal > 0 ? ((counters.httpErrorsTotal / counters.httpRequestsTotal) * 100).toFixed(2) : "0",
+          version: "2.0.0",
+        },
+        agents: { byStatus: agentsByStatus, heartbeats: heartbeats.sort((a, b) => a.ageSeconds - b.ageSeconds) },
+        tasks: { byStatus: tasksByStatus },
+        webhooks: { byStatus: webhooksByStatus, recentErrors24h: recentErrors || 0 },
+      };
+    }),
+
     // ─── Admin Management ─────────────────────────────────────────────────
     stats: adminProcedure.query(async () => {
       const [usersRes, agentsRes, tasksRes, activeAgentsRes, completedRes] = await Promise.all([
