@@ -18,6 +18,7 @@ import {
   InsertBarterTransaction,
   InsertHeartbeatLog,
 } from "../drizzle/schema";
+import { logger } from './_core/logger';
 import { ENV } from './_core/env';
 
 // ─── Supabase Client ─────────────────────────────────────────────────────────
@@ -36,8 +37,16 @@ export function getDb(): SupabaseClient {
 }
 
 function check<T>(result: { data: T; error: any }): T {
-  if (result.error) throw new Error(result.error.message || JSON.stringify(result.error));
+  if (result.error) {
+    logger.error({ err: result.error }, "Database operation failed");
+    throw new Error("Database operation failed");
+  }
   return result.data;
+}
+
+/** Escape special LIKE/ILIKE chars to prevent pattern injection */
+function escapeLike(str: string): string {
+  return str.replace(/[%_\\]/g, "\\$&");
 }
 
 // ─── Users ──────────────────────────────────────────────────────────────────
@@ -56,7 +65,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     if (!values.lastSignedIn) values.lastSignedIn = new Date().toISOString();
     check(await getDb().from("users").upsert(values, { onConflict: "openId" }));
   } catch (error) {
-    console.error("[Database] Failed to upsert user:", error);
+    logger.error({ err: error }, "Database: Failed to upsert user");
     throw error;
   }
 }
@@ -105,10 +114,13 @@ export async function listAgents(filters?: {
   const offset = filters?.offset || 0;
   let query = getDb().from("agents").select("*", { count: "exact" });
   if (filters?.status) query = query.eq("status", filters.status);
-  if (filters?.search) query = query.or(`name.ilike.%${filters.search}%,description.ilike.%${filters.search}%`);
+  if (filters?.search) {
+    const s = escapeLike(filters.search);
+    query = query.or(`name.ilike.%${s}%,description.ilike.%${s}%`);
+  }
   query = (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1);
   const { data, count, error } = await query;
-  if (error) throw new Error(error.message);
+  if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   let result = data || [];
   if (filters?.role) {
     result = result.filter((a: any) => a.roles && a.roles.includes(filters.role));
@@ -227,14 +239,14 @@ export async function listTasks(filters?: {
 }) {
   const limit = filters?.limit || 50;
   const offset = filters?.offset || 0;
-  let query = getDb().from("tasks").select("*", { count: "exact" });
+  let query = getDb().from("tasks").select("*", { count: "estimated" });
   if (filters?.status) query = query.eq("status", filters.status);
   if (filters?.requesterId) query = query.eq("requesterId", filters.requesterId);
   if (filters?.assigneeId) query = query.eq("assigneeId", filters.assigneeId);
   if (filters?.priority) query = query.eq("priority", filters.priority);
   query = (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1);
-  const { data, count, error } = await query;
-  if (error) throw new Error(error.message);
+  const { data, count, error } = await (query as any).abortSignal(AbortSignal.timeout(8_000));
+  if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   return { tasks: data || [], total: count || 0 };
 }
 
@@ -687,6 +699,18 @@ export async function updateA2AMessage(messageId: string, data: Partial<InsertA2
   check(await getDb().from("a2a_messages").update(data as any).eq("messageId", messageId));
 }
 
+export async function getA2AInbox(agentId: string, status?: string, limit = 20) {
+  let q = getDb().from("a2a_messages").select("*").eq("toAgentId", agentId).order("createdAt", { ascending: false }).limit(limit);
+  if (status) q = q.eq("status", status);
+  const { data } = await q;
+  return data ?? [];
+}
+
+export async function getA2AOutbox(agentId: string, limit = 20) {
+  const { data } = await getDb().from("a2a_messages").select("*").eq("fromAgentId", agentId).order("createdAt", { ascending: false }).limit(limit);
+  return data ?? [];
+}
+
 // ─── Blockchain Settlements ──────────────────────────────────────────────────
 export async function createBlockchainSettlement(settlement: InsertBlockchainSettlement) {
   check(await getDb().from("blockchain_settlements").insert(settlement as any));
@@ -746,10 +770,10 @@ export async function listKnowledgePackages(opts?: {
   if (opts?.category) query = query.eq("category", opts.category);
   if (opts?.auditStatus) query = query.eq("auditStatus", opts.auditStatus);
   if (opts?.isListed !== undefined) query = query.eq("isListed", opts.isListed);
-  if (opts?.search) query = query.ilike("displayName", `%${opts.search}%`);
+  if (opts?.search) query = query.ilike("displayName", `%${escapeLike(opts.search)}%`);
   query = (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1);
   const { data, count, error } = await query;
-  if (error) throw new Error(error.message);
+  if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   return { packages: data || [], total: count || 0 };
 }
 
@@ -809,7 +833,7 @@ export async function listBarterTransactions(opts?: {
   if (opts?.status) query = query.eq("status", opts.status);
   query = (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1);
   const { data, count, error } = await query;
-  if (error) throw new Error(error.message);
+  if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   return { transactions: data || [], total: count || 0 };
 }
 
@@ -854,7 +878,7 @@ export async function listHeartbeatLogs(opts?: {
   if (opts?.healthy !== undefined) query = query.eq("healthy", opts.healthy);
   query = (query as any).order("timestamp", { ascending: false }).range(offset, offset + limit - 1);
   const { data, count, error } = await query;
-  if (error) throw new Error(error.message);
+  if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   return { logs: data || [], total: count || 0 };
 }
 
@@ -1026,7 +1050,7 @@ export async function listYouTubeVideos(userId: number, opts?: {
   if (opts?.status) query = query.eq("status", opts.status);
   query = (query as any).order("published_at", { ascending: false }).range(offset, offset + limit - 1);
   const { data, count, error } = await query;
-  if (error) throw new Error(error.message);
+  if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   return { videos: data || [], total: count || 0 };
 }
 

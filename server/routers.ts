@@ -1,3 +1,4 @@
+import { logger } from "./_core/logger";
 import { COOKIE_NAME } from "@shared/const";
 import nacl from "tweetnacl";
 import { getSessionCookieOptions } from "./_core/cookies";
@@ -118,7 +119,7 @@ const enrollmentRouter = router({
         verifiedAt: new Date(),
       });
 
-      console.log(`[Enrollment] Creating agent: ${agentId}, name: ${challenge.agentName}`);
+      logger.info("Enrollment: Creating agent: %s, name: %s", agentId, challenge.agentName);
       try {
         await db.createAgent({
           agentId,
@@ -127,14 +128,14 @@ const enrollmentRouter = router({
           roles: challenge.roles,
           status: "active",
         });
-      } catch(e: any) { console.error("[Enrollment] createAgent failed:", e.message, e); throw new Error("Failed to create agent: " + e.message); }
+      } catch(e: any) { logger.error({ err: e }, "Enrollment: createAgent failed: %s", e.message); throw new Error("Failed to create agent. Please try again."); }
 
-      console.log(`[Enrollment] Creating reputation for: ${agentId}`);
+      logger.info("Enrollment: Creating reputation for: %s", agentId);
       try {
         await db.getOrCreateReputation(agentId);
-      } catch(e: any) { console.error("[Enrollment] getOrCreateReputation failed:", e.message); /* non-fatal */ }
+      } catch(e: any) { logger.error({ err: e }, "Enrollment: getOrCreateReputation failed: %s", e.message); /* non-fatal */ }
 
-      console.log(`[Enrollment] Creating session: ${sessionId}`);
+      logger.info("Enrollment: Creating session: %s", sessionId);
       try {
         await db.createAgentSession({
           sessionId,
@@ -144,7 +145,7 @@ const enrollmentRouter = router({
           accessTokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
           refreshTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         });
-      } catch(e: any) { console.error("[Enrollment] createAgentSession failed:", e.message, e); throw new Error("Failed to create session: " + e.message); }
+      } catch(e: any) { logger.error({ err: e }, "Enrollment: createAgentSession failed: %s", e.message); throw new Error("Failed to create session. Please try again."); }
 
       await db.createAuditEntry({
         eventId: `evt_${nanoid(16)}`,
@@ -181,9 +182,9 @@ const sessionsRouter = router({
 const agentsRouter = router({
   list: publicProcedure
     .input(z.object({
-      status: z.string().optional(),
-      role: z.string().optional(),
-      search: z.string().optional(),
+      status: z.string().max(50).optional(),
+      role: z.string().max(50).optional(),
+      search: z.string().max(256).optional(),
       limit: z.number().min(1).max(100).optional(),
       offset: z.number().min(0).optional(),
     }).optional())
@@ -660,7 +661,7 @@ const tasksRouter = router({
             });
           } catch (rpcErr: any) {
             // Fallback: RPC not available or has errors — use non-atomic path
-            console.warn(`[tasks.updateStatus] Atomic RPC failed (${rpcErr.message?.slice(0, 80)}), using fallback`);
+            logger.warn("tasks.updateStatus: Atomic RPC failed (%s), using fallback", rpcErr.message?.slice(0, 80));
 
             const newAssigneeBalance = parseFloat(assignee.creditBalance as string) + netReward;
             const newRequesterBalance = parseFloat(requester.creditBalance as string) - reward;
@@ -873,7 +874,7 @@ const economyRouter = router({
       } catch (rpcErr: any) {
         // Fallback: RPC not deployed yet — use non-atomic path
         if (rpcErr.message?.includes("function") || rpcErr.message?.includes("does not exist")) {
-          console.warn("[economy.transfer] Atomic RPC not available, using fallback (deploy 002_atomic_transfer_rpc.sql)");
+          logger.warn("economy.transfer: Atomic RPC not available, using fallback (deploy 002_atomic_transfer_rpc.sql)");
         } else {
           throw rpcErr; // Re-throw real errors (insufficient balance, agent not found, etc.)
         }
@@ -1037,6 +1038,33 @@ const a2aRouter = router({
       const task = await db.getTaskById(input.taskId);
       return task;
     }),
+
+  inbox: agentProcedure
+    .input(z.object({
+      status: z.enum(["queued", "delivered", "failed", "expired"]).optional(),
+      limit: z.number().min(1).max(100).default(20),
+    }).optional())
+    .query(async ({ ctx, input }) => {
+      const messages = await db.getA2AInbox(ctx.agentId, input?.status, input?.limit ?? 20);
+      return { messages, count: messages.length };
+    }),
+
+  outbox: agentProcedure
+    .input(z.object({ limit: z.number().min(1).max(100).default(20) }).optional())
+    .query(async ({ ctx, input }) => {
+      const messages = await db.getA2AOutbox(ctx.agentId, input?.limit ?? 20);
+      return { messages, count: messages.length };
+    }),
+
+  ack: agentProcedure
+    .input(z.object({ messageId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const msg = await db.getA2AMessage(input.messageId);
+      if (!msg) throw new Error("Message not found");
+      if (msg.toAgentId !== ctx.agentId) throw new Error("Not your message");
+      await db.updateA2AMessageStatus(input.messageId, "delivered");
+      return { success: true };
+    }),
 });
 
 // ─── Knowledge & Audit Router ──────────────────────────────────────────────
@@ -1050,13 +1078,13 @@ const knowledgeRouter = router({
       displayName: z.string().min(1).max(512),
       version: z.string().default("1.0.0"),
       description: z.string().max(5000).optional(),
-      category: z.string(),
-      subcategory: z.string().optional(),
+      category: z.string().max(100),
+      subcategory: z.string().max(100).optional(),
       proficiencyLevel: z.enum(PROFICIENCY_LEVELS).optional(),
-      capabilities: z.array(z.string()).optional(),
-      prerequisites: z.array(z.object({ skillId: z.string(), minProficiency: z.string() })).optional(),
-      rootHash: z.string(),
-      signature: z.string(),
+      capabilities: z.array(z.string().max(100)).max(50).optional(),
+      prerequisites: z.array(z.object({ skillId: z.string().max(100), minProficiency: z.string().max(50) })).max(20).optional(),
+      rootHash: z.string().max(256),
+      signature: z.string().max(512),
       fileSize: z.number().positive(),
       moduleCount: z.number().min(1),
       testCount: z.number().min(0),
@@ -1100,11 +1128,11 @@ const knowledgeRouter = router({
 
   list: publicProcedure
     .input(z.object({
-      authorAgentId: z.string().optional(),
-      category: z.string().optional(),
-      auditStatus: z.string().optional(),
+      authorAgentId: z.string().max(100).optional(),
+      category: z.string().max(100).optional(),
+      auditStatus: z.string().max(50).optional(),
       isListed: z.boolean().optional(),
-      search: z.string().optional(),
+      search: z.string().max(256).optional(),
       limit: z.number().min(1).max(100).optional(),
       offset: z.number().min(0).optional(),
     }).optional())
@@ -1597,8 +1625,8 @@ const fleetRouter = router({
 const leaderboardRouter = router({
   rankings: publicProcedure.input(z.object({
     sortBy: z.enum(["composite", "reputation", "tasks", "knowledge", "earnings"]).default("composite"),
-    filterRole: z.string().optional(),
-    filterTier: z.string().optional(),
+    filterRole: z.string().max(50).optional(),
+    filterTier: z.string().max(50).optional(),
     limit: z.number().min(1).max(200).default(100),
   }).optional()).query(async ({ input }) => {
     const opts = input ?? { sortBy: "composite", limit: 100 };
