@@ -8,6 +8,7 @@ import {
 import { toast } from "sonner";
 import { TonWalletIndicator } from "@/components/TonWalletConnect";
 import { WalletStatusCard } from "@/components/TonWalletLogin";
+import { useFederationSSE } from "@/hooks/useSSE";
 
 const CLAW_ICON_URL = "https://files.manuscdn.com/user_upload_by_module/session_file/111041160/iueFwHBwfKMltOnY.png";
 
@@ -205,8 +206,9 @@ function TreasuryCard() {
 }
 
 export default function Dashboard() {
-  const { data: stats } = trpc.federation.stats.useQuery(undefined, { refetchInterval: 15000 });
-  const { data: health } = trpc.federation.health.useQuery(undefined, { refetchInterval: 10000 });
+  useFederationSSE();
+  const { data: stats } = trpc.federation.stats.useQuery(undefined, { refetchInterval: 60000 });
+  const { data: health } = trpc.federation.health.useQuery(undefined, { refetchInterval: 60000 });
   const utils = trpc.useUtils();
   const seedMutation = trpc.admin.seedDemo.useMutation({
     onSuccess: (data) => {

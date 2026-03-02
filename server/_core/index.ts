@@ -18,6 +18,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { startScheduledJobs } from "../scheduled-jobs";
 import { registerMetricsRoute, incrementRequests, incrementErrors } from "../metrics";
+import { registerSSERoute } from "../sse";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -52,6 +53,8 @@ async function startServer() {
   });
   // Prometheus metrics endpoint (no rate limit)
   registerMetricsRoute(app);
+  // SSE endpoint for live dashboard updates
+  registerSSERoute(app);
   // Global API rate limiter
   app.use("/api", apiLimiter);
   // Auth routes (register + login)

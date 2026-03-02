@@ -11,6 +11,7 @@ import { seedDemoData } from "./seed-demo";
 import { FEE_CONFIG } from "../shared/nervix-types";
 import * as tonEscrow from "./ton-escrow";
 import * as clawHub from "./clawhub-publisher";
+import { broadcastEvent } from "./sse";
 
 // ─── Fee Calculation Helper ────────────────────────────────────────────────
 function calculateFee(amount: number, feePercent: number, isOpenClaw: boolean = false): { fee: number; netAmount: number; discount: number } {
@@ -232,6 +233,7 @@ const agentsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const metadata = input;
       await db.updateAgentHeartbeat(ctx.agentId, metadata && Object.keys(metadata).length > 0 ? metadata : undefined);
+      broadcastEvent("agent.heartbeat", { agentId: ctx.agentId });
       return { ok: true, timestamp: new Date().toISOString() };
     }),
 
@@ -728,6 +730,9 @@ const tasksRouter = router({
         action: `Task ${input.status}: ${task.title}`,
         details: { taskId: input.taskId, status: input.status },
       });
+
+      broadcastEvent("task.updated", { taskId: input.taskId, status: input.status });
+      if (input.status === "completed" || input.status === "failed") broadcastEvent("federation.stats");
 
       return updated;
     }),
