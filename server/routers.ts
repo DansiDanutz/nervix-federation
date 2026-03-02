@@ -631,78 +631,96 @@ const tasksRouter = router({
         const requester = await db.getAgentById(task.requesterId);
 
         if (assignee && requester) {
-          // Calculate platform fee on task reward
           const isAssigneeOpenClaw = (assignee as any).source === "openclaw";
           const { fee: taskFee, netAmount: netReward, discount: taskDiscount } = calculateFee(
             reward, FEE_CONFIG.taskPaymentFeePercent, isAssigneeOpenClaw
           );
-
-          // Credit transfer (assignee gets net reward after fee)
-          const newAssigneeBalance = parseFloat(assignee.creditBalance as string) + netReward;
-          const newRequesterBalance = parseFloat(requester.creditBalance as string) - reward;
-
-          await db.updateAgent(task.assigneeId, {
-            creditBalance: newAssigneeBalance.toFixed(6),
-            totalTasksCompleted: assignee.totalTasksCompleted + 1,
-            totalCreditsEarned: (parseFloat(assignee.totalCreditsEarned as string) + netReward).toFixed(6),
-            activeTasks: Math.max(0, assignee.activeTasks - 1),
-          });
-
-          await db.updateAgent(task.requesterId, {
-            totalCreditsSpent: (parseFloat(requester.totalCreditsSpent as string) + reward).toFixed(6),
-          });
-
-          await db.createEconomicTransaction({
-            transactionId: `tx_${nanoid(20)}`,
-            type: "task_reward",
-            fromAgentId: task.requesterId,
-            toAgentId: task.assigneeId,
-            taskId: input.taskId,
-            amount: netReward.toFixed(6),
-            balanceAfterFrom: newRequesterBalance.toFixed(6),
-            balanceAfterTo: newAssigneeBalance.toFixed(6),
-            memo: `Reward for task: ${task.title} (after ${FEE_CONFIG.taskPaymentFeePercent}% platform fee)`,
-          });
-
-          // Record platform fee
-          if (taskFee > 0) {
-            await db.createEconomicTransaction({
-              transactionId: `tx_fee_${nanoid(16)}`,
-              type: "platform_fee",
-              fromAgentId: task.requesterId,
-              toAgentId: "nervix_treasury",
-              taskId: input.taskId,
-              amount: taskFee.toFixed(6),
-              balanceAfterFrom: newRequesterBalance.toFixed(6),
-              balanceAfterTo: "0",
-              memo: `Task fee (${FEE_CONFIG.taskPaymentFeePercent}%)${taskDiscount > 0 ? ` — OpenClaw discount: ${taskDiscount.toFixed(6)} cr` : ""}`,
-            });
-          }
-
-          // Update reputation
-          const rep = await db.getOrCreateReputation(task.assigneeId);
           const completionTime = task.startedAt
             ? (new Date().getTime() - new Date(task.startedAt).getTime()) / 1000
             : 60;
-          const successWeight = 0.4;
-          const timeWeight = 0.25;
-          const qualityWeight = 0.25;
-          const uptimeWeight = 0.1;
+          const txId = `tx_${nanoid(20)}`;
+          const feeTxId = `tx_fee_${nanoid(16)}`;
 
-          const successScore = 1.0;
-          const timeScore = Math.max(0, 1 - (completionTime / (task.maxDuration || 3600)));
-          const qualityScore = 0.8; // Default until rated
-          const uptimeScore = parseFloat(rep.uptimeConsistency as string) || 0.9;
+          // Attempt atomic RPC (all writes in one DB transaction)
+          try {
+            await db.atomicCompleteTask({
+              taskId: input.taskId,
+              assigneeId: task.assigneeId,
+              requesterId: task.requesterId,
+              reward: reward.toFixed(6),
+              fee: taskFee.toFixed(6),
+              netReward: netReward.toFixed(6),
+              feePercent: FEE_CONFIG.taskPaymentFeePercent,
+              isOpenClaw: isAssigneeOpenClaw,
+              discount: taskDiscount.toFixed(6),
+              txId,
+              feeTxId,
+              taskTitle: task.title || "",
+              completionTimeSec: completionTime,
+              maxDurationSec: task.maxDuration || 3600,
+            });
+          } catch (rpcErr: any) {
+            // Fallback: RPC not deployed yet — use non-atomic path
+            if (rpcErr.message?.includes("function") || rpcErr.message?.includes("does not exist") || rpcErr.message?.includes("schema cache")) {
+              console.warn("[tasks.updateStatus] Atomic RPC not available, using fallback (deploy 003_atomic_task_completion.sql)");
 
-          const newOverall = (successScore * successWeight) + (timeScore * timeWeight) + (qualityScore * qualityWeight) + (uptimeScore * uptimeWeight);
+              const newAssigneeBalance = parseFloat(assignee.creditBalance as string) + netReward;
+              const newRequesterBalance = parseFloat(requester.creditBalance as string) - reward;
 
-          await db.updateReputation(task.assigneeId, {
-            overallScore: newOverall.toFixed(4),
-            successRate: ((parseFloat(rep.successRate as string) * rep.totalTasksScored + 1) / (rep.totalTasksScored + 1)).toFixed(4),
-            avgResponseTime: ((parseFloat(rep.avgResponseTime as string) * rep.totalTasksScored + completionTime) / (rep.totalTasksScored + 1)).toFixed(2),
-            totalTasksScored: rep.totalTasksScored + 1,
-            lastCalculated: new Date(),
-          });
+              await db.updateAgent(task.assigneeId, {
+                creditBalance: newAssigneeBalance.toFixed(6),
+                totalTasksCompleted: assignee.totalTasksCompleted + 1,
+                totalCreditsEarned: (parseFloat(assignee.totalCreditsEarned as string) + netReward).toFixed(6),
+                activeTasks: Math.max(0, assignee.activeTasks - 1),
+              });
+
+              await db.updateAgent(task.requesterId, {
+                totalCreditsSpent: (parseFloat(requester.totalCreditsSpent as string) + reward).toFixed(6),
+              });
+
+              await db.createEconomicTransaction({
+                transactionId: txId,
+                type: "task_reward",
+                fromAgentId: task.requesterId,
+                toAgentId: task.assigneeId,
+                taskId: input.taskId,
+                amount: netReward.toFixed(6),
+                balanceAfterFrom: newRequesterBalance.toFixed(6),
+                balanceAfterTo: newAssigneeBalance.toFixed(6),
+                memo: `Reward for task: ${task.title} (after ${FEE_CONFIG.taskPaymentFeePercent}% platform fee)`,
+              });
+
+              if (taskFee > 0) {
+                await db.createEconomicTransaction({
+                  transactionId: feeTxId,
+                  type: "platform_fee",
+                  fromAgentId: task.requesterId,
+                  toAgentId: "nervix_treasury",
+                  taskId: input.taskId,
+                  amount: taskFee.toFixed(6),
+                  balanceAfterFrom: newRequesterBalance.toFixed(6),
+                  balanceAfterTo: "0",
+                  memo: `Task fee (${FEE_CONFIG.taskPaymentFeePercent}%)${taskDiscount > 0 ? ` — OpenClaw discount: ${taskDiscount.toFixed(6)} cr` : ""}`,
+                });
+              }
+
+              // Update reputation (non-atomic fallback)
+              const rep = await db.getOrCreateReputation(task.assigneeId);
+              const timeScore = Math.max(0, 1 - (completionTime / (task.maxDuration || 3600)));
+              const uptimeScore = parseFloat(rep.uptimeConsistency as string) || 0.9;
+              const newOverall = (1.0 * 0.4) + (timeScore * 0.25) + (0.8 * 0.25) + (uptimeScore * 0.1);
+
+              await db.updateReputation(task.assigneeId, {
+                overallScore: newOverall.toFixed(4),
+                successRate: ((parseFloat(rep.successRate as string) * rep.totalTasksScored + 1) / (rep.totalTasksScored + 1)).toFixed(4),
+                avgResponseTime: ((parseFloat(rep.avgResponseTime as string) * rep.totalTasksScored + completionTime) / (rep.totalTasksScored + 1)).toFixed(2),
+                totalTasksScored: rep.totalTasksScored + 1,
+                lastCalculated: new Date(),
+              });
+            } else {
+              throw rpcErr; // Re-throw real errors
+            }
+          }
         }
       }
 

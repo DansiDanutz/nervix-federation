@@ -343,6 +343,43 @@ export async function atomicTransferCredits(params: {
   return data as any;
 }
 
+// Atomic task completion via Supabase RPC (P2-T2: Financial Transaction Safety)
+export async function atomicCompleteTask(params: {
+  taskId: string;
+  assigneeId: string;
+  requesterId: string;
+  reward: string;
+  fee: string;
+  netReward: string;
+  feePercent: number;
+  isOpenClaw?: boolean;
+  discount?: string;
+  txId: string;
+  feeTxId: string;
+  taskTitle: string;
+  completionTimeSec: number;
+  maxDurationSec: number;
+}): Promise<{ success: boolean; newAssigneeBalance: string; newRequesterBalance: string; fee: string; newOverallScore: string }> {
+  const { data, error } = await getDb().rpc("nervix_complete_task", {
+    p_task_id: params.taskId,
+    p_assignee_id: params.assigneeId,
+    p_requester_id: params.requesterId,
+    p_reward: params.reward,
+    p_fee: params.fee,
+    p_net_reward: params.netReward,
+    p_fee_percent: params.feePercent,
+    p_is_openclaw: params.isOpenClaw ?? false,
+    p_discount: params.discount ?? "0",
+    p_tx_id: params.txId,
+    p_fee_tx_id: params.feeTxId,
+    p_task_title: params.taskTitle,
+    p_completion_time_sec: params.completionTimeSec,
+    p_max_duration_sec: params.maxDurationSec,
+  });
+  if (error) throw new Error(error.message || "Atomic task completion failed");
+  return data as any;
+}
+
 export async function getTreasuryFees() {
   const { data } = await getDb()
     .from("economic_transactions")
