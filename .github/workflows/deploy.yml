@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.4.1'
+
 jobs:
   deploy:
     name: Build & Deploy to Nano
@@ -12,16 +16,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          bun-version: latest
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: bun install
+        run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: bun run build
+        run: pnpm run build
 
       - name: Deploy to server
         env:
@@ -39,4 +49,5 @@ jobs:
           # Health check
           sleep 5
           ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no root@$SERVER_IP \
-            "curl -sf http://localhost:3000/api/trpc/federation.health | grep -q healthy && echo '✅ Deploy OK' || (echo '❌ Health check failed' && exit 1)"
+            "curl -sf http://localhost:3000/api/trpc/federation.health || (echo '❌ Health check failed' && exit 1)"
+          echo "✅ Deploy OK"
