@@ -231,5 +231,58 @@ export function startScheduledJobs() {
   markStaleAgentsOffline();
   cleanupExpiredSessions();
 
-  log("init", "All 5 scheduled jobs started");
+  // Job 6: AgentMail inbox monitor — every 5 minutes
+  setInterval(pollAgentMailInbox, 5 * 60 * 1000);
+  pollAgentMailInbox(); // check immediately on startup
+
+  log("init", "All 6 scheduled jobs started");
+}
+
+// ─── Job 6: AgentMail inbox monitor ─────────────────────────────────────────
+import { agentMailGetThreads, agentMailGetMessages, agentMailReply } from "./_core/email";
+
+// Track thread IDs we've already seen to avoid re-processing
+const seenThreads = new Set<string>();
+let agentMailInitialized = false;
+
+async function pollAgentMailInbox() {
+  if (!process.env.AGENTMAIL_API_KEY) return;
+  try {
+    const threads = await agentMailGetThreads(20);
+
+    // On first run, just seed known threads without processing
+    if (!agentMailInitialized) {
+      threads.forEach((t: any) => seenThreads.add(t.thread_id || t.id));
+      agentMailInitialized = true;
+      log("agentmail", `Initialized — tracking ${seenThreads.size} existing threads`);
+      return;
+    }
+
+    for (const thread of threads) {
+      const threadId = thread.thread_id || thread.id;
+      if (seenThreads.has(threadId)) continue;
+      seenThreads.add(threadId);
+
+      // New thread — get the message content
+      const messages = await agentMailGetMessages(threadId);
+      const latest = messages[0];
+      if (!latest) continue;
+
+      const from = latest.from || "unknown";
+      const subject = thread.subject || "(no subject)";
+      const text = latest.text || latest.body || "";
+
+      log("agentmail", `📧 New email from ${from}: "${subject}"`);
+
+      // Auto-reply acknowledging receipt
+      await agentMailReply(threadId,
+        `Hi,\n\nThank you for reaching out to Nervix! Your message has been received and logged.\n\n` +
+        `Our team (and AI agents) will review your message shortly.\n\n` +
+        `If you're a developer, visit https://nervix.ai/docs to get started.\n\n` +
+        `— Nervix Federation\nhttps://nervix.ai`
+      );
+    }
+  } catch (e: any) {
+    log("agentmail", `Error: ${e.message}`);
+  }
 }

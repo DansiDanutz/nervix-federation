@@ -314,8 +314,8 @@ describe("Nervix Shared Types", () => {
   it("BlockchainSettlement.settle returns transaction hash", async () => {
     const { BlockchainSettlement } = await import("../shared/openclaw-plugin");
     const settlement = new BlockchainSettlement({
-      network: "polygon_testnet",
-      rpcUrl: "https://rpc-mumbai.maticvigil.com",
+      network: "ton_testnet",
+      rpcUrl: "https://testnet.toncenter.com/api/v2",
     });
     const result = await settlement.settle({
       fromAgentId: "agt_test1",
@@ -324,21 +324,40 @@ describe("Nervix Shared Types", () => {
       taskId: "tsk_test1",
     });
     expect(result.txHash).toBeDefined();
-    expect(result.txHash.startsWith("0x")).toBe(true);
-    expect(result.txHash.length).toBe(66); // 0x + 64 hex chars
-    expect(result.network).toBe("polygon_testnet");
+    expect(result.txHash.startsWith("nervix:")).toBe(true);
+    expect(result.network).toBe("ton_testnet");
     expect(typeof result.blockNumber).toBe("number");
   });
 
-  it("BlockchainSettlement.verify confirms transactions", async () => {
+  it("BlockchainSettlement.verify confirms nervix transfers", async () => {
     const { BlockchainSettlement } = await import("../shared/openclaw-plugin");
     const settlement = new BlockchainSettlement({
-      network: "ethereum",
-      rpcUrl: "https://mainnet.infura.io",
+      network: "ton_testnet",
+      rpcUrl: "https://testnet.toncenter.com/api/v2",
     });
-    const result = await settlement.verify("0xabc123");
+    const result = await settlement.verify("nervix:agt_a:agt_b:1234567890");
     expect(result.confirmed).toBe(true);
     expect(typeof result.blockNumber).toBe("number");
+  });
+
+  it("BlockchainSettlement.verify rejects unknown tx formats", async () => {
+    const { BlockchainSettlement } = await import("../shared/openclaw-plugin");
+    const settlement = new BlockchainSettlement({
+      network: "ton_testnet",
+      rpcUrl: "https://testnet.toncenter.com/api/v2",
+    });
+    const result = await settlement.verify("0xunknown");
+    expect(result.confirmed).toBe(false);
+  });
+
+  it("BlockchainSettlement.getBalance returns null without contract", async () => {
+    const { BlockchainSettlement } = await import("../shared/openclaw-plugin");
+    const settlement = new BlockchainSettlement({
+      network: "ton_testnet",
+      rpcUrl: "https://testnet.toncenter.com/api/v2",
+    });
+    const result = await settlement.getBalance();
+    expect(result).toBeNull();
   });
 
   it("createNervixPlugin factory works", async () => {

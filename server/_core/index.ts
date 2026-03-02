@@ -17,6 +17,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { startScheduledJobs } from "../scheduled-jobs";
+import { registerMetricsRoute, incrementRequests, incrementErrors } from "../metrics";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -43,6 +44,14 @@ async function startServer() {
   // Configure body parser with reduced size limit (security hardening)
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ limit: "10mb", extended: true }));
+  // Request counting for metrics
+  app.use((_req, res, next) => {
+    incrementRequests();
+    res.on("finish", () => { if (res.statusCode >= 500) incrementErrors(); });
+    next();
+  });
+  // Prometheus metrics endpoint (no rate limit)
+  registerMetricsRoute(app);
   // Global API rate limiter
   app.use("/api", apiLimiter);
   // Auth routes (register + login)

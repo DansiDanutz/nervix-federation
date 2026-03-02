@@ -138,7 +138,7 @@ const enrollmentRouter = router({
           agentId,
           accessToken,
           refreshToken,
-          accessTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          accessTokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
           refreshTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         });
       } catch(e: any) { console.error("[Enrollment] createAgentSession failed:", e.message, e); throw new Error("Failed to create session: " + e.message); }
@@ -153,6 +153,24 @@ const enrollmentRouter = router({
       });
 
       return { agentId, accessToken, refreshToken, sessionId };
+    }),
+});
+
+// ─── Session Router (token refresh) ─────────────────────────────────────────
+const sessionsRouter = router({
+  refresh: publicProcedure
+    .input(z.object({ refreshToken: z.string().startsWith("rt_") }))
+    .mutation(async ({ input }) => {
+      const session = await db.getAgentSessionByRefreshToken(input.refreshToken);
+      if (!session) throw new Error("Invalid refresh token");
+      if (session.isRevoked) throw new Error("Session has been revoked");
+      if (new Date() > new Date(session.refreshTokenExpiresAt)) {
+        throw new Error("Refresh token expired — re-enroll required");
+      }
+      const newAccessToken = `at_${nanoid(48)}`;
+      const newExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      await db.rotateAccessToken(session.sessionId, newAccessToken, newExpiresAt);
+      return { accessToken: newAccessToken, expiresAt: newExpiresAt.toISOString() };
     }),
 });
 
@@ -1870,6 +1888,7 @@ export const appRouter = router({
     }),
   }),
   enrollment: enrollmentRouter,
+  sessions: sessionsRouter,
   agents: agentsRouter,
   tasks: tasksRouter,
   economy: economyRouter,

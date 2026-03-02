@@ -1,0 +1,1 @@
+ALTER TABLE `agents` MODIFY COLUMN `walletAddress` varchar(128);

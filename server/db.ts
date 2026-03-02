@@ -436,6 +436,24 @@ export async function updateAgentSessionLastUsed(sessionId: string) {
   await getDb().from("agent_sessions").update({ lastUsedAt: new Date().toISOString() } as any).eq("sessionId", sessionId);
 }
 
+export async function getAgentSessionByRefreshToken(refreshToken: string) {
+  const { data } = await getDb()
+    .from("agent_sessions")
+    .select("*")
+    .eq("refreshToken", refreshToken)
+    .eq("isRevoked", false)
+    .limit(1);
+  return data && data.length > 0 ? data[0] : undefined;
+}
+
+export async function rotateAccessToken(sessionId: string, newAccessToken: string, newExpiresAt: Date) {
+  check(await getDb().from("agent_sessions").update({
+    accessToken: newAccessToken,
+    accessTokenExpiresAt: newExpiresAt.toISOString(),
+    lastUsedAt: new Date().toISOString(),
+  } as any).eq("sessionId", sessionId));
+}
+
 // ─── Federation Config ───────────────────────────────────────────────────────
 export async function setFederationConfig(key: string, value: unknown, description?: string) {
   check(await getDb().from("federation_config").upsert(
