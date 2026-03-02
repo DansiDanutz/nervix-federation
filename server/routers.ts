@@ -1,5 +1,4 @@
 import { COOKIE_NAME } from "@shared/const";
-import crypto from "crypto";
 import nacl from "tweetnacl";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -1121,28 +1120,81 @@ const knowledgeRouter = router({
       if (pkg.auditStatus !== "pending") throw new Error(`Package already audited: ${pkg.auditStatus}`);
 
       await db.updateKnowledgePackage(input.packageId, { auditStatus: "in_review" });
+      const auditStart = Date.now();
 
-      // Deterministic audit scoring based on package properties
-      // Uses hash of package content for reproducible scores
-      const hashSeed = crypto.createHash("sha256")
-        .update(`${pkg.packageId}:${pkg.rootHash}:${pkg.version}`)
-        .digest();
+      // ─── Real quality analysis based on actual package properties ───
 
-      // Derive deterministic scores from hash bytes (each byte → 0-255 → scaled)
-      const h = (idx: number, min: number, range: number) =>
-        min + Math.floor((hashSeed[idx % hashSeed.length] / 255) * range);
+      // 1. Compilability: module count + file size sanity check
+      const hasModules = pkg.moduleCount >= 1;
+      const sizePerModule = pkg.fileSize / Math.max(1, pkg.moduleCount);
+      const sizeReasonable = sizePerModule >= 100 && sizePerModule <= 500_000; // 100B-500KB per module
+      const compilabilityScore = Math.min(100,
+        (hasModules ? 50 : 0) +
+        (sizeReasonable ? 20 : 5) +
+        Math.min(30, pkg.moduleCount * 3) // up to 30pts for 10+ modules
+      );
 
-      // Reward well-structured packages: more modules + tests = higher base scores
-      const moduleBonus = Math.min(15, Math.floor(pkg.moduleCount / 2));
-      const testBonus = Math.min(10, pkg.testCount);
+      // 2. Originality: check DB for duplicate rootHash from other packages
+      const { data: dupes } = await db.getDb()
+        .from("knowledge_packages")
+        .select("packageId")
+        .eq("rootHash", pkg.rootHash)
+        .neq("packageId", pkg.packageId)
+        .limit(5);
+      const isDuplicate = (dupes?.length ?? 0) > 0;
+      const originalityScore = isDuplicate ? 10 : 90;
+
+      // 3. Category match: valid category + has description + has capabilities
+      const validCategory = KNOWLEDGE_CATEGORIES.includes(pkg.category as any);
+      const hasDescription = !!pkg.description && pkg.description.length >= 20;
+      const hasCapabilities = Array.isArray(pkg.capabilities) && pkg.capabilities.length > 0;
+      const hasSubcategory = !!pkg.subcategory;
+      const categoryMatchScore = Math.min(100,
+        (validCategory ? 40 : 0) +
+        (hasDescription ? 25 : 0) +
+        (hasCapabilities ? 20 : 0) +
+        (hasSubcategory ? 15 : 0)
+      );
+
+      // 4. Security scan: test coverage ratio + prerequisites declared
+      const testRatio = pkg.moduleCount > 0 ? pkg.testCount / pkg.moduleCount : 0;
+      const hasPrereqs = Array.isArray(pkg.prerequisites) && pkg.prerequisites.length > 0;
+      const hasSignature = !!pkg.signature && pkg.signature.length >= 32;
+      const securityFlags: string[] = [];
+      if (testRatio === 0) securityFlags.push("no_tests");
+      if (!hasSignature) securityFlags.push("weak_signature");
+      if (pkg.fileSize > 10_000_000) securityFlags.push("large_payload");
+      const securityScore = Math.min(100,
+        (hasSignature ? 30 : 10) +
+        Math.min(40, Math.round(testRatio * 40)) + // up to 40pts for 1:1 test ratio
+        (securityFlags.length === 0 ? 20 : 0) +
+        (hasPrereqs ? 10 : 5)
+      );
+
+      // 5. Completeness: modules + tests + description + storage + version
+      const hasStorage = !!pkg.storageUrl;
+      const hasVersion = !!pkg.version && pkg.version !== "0.0.0";
+      const completenessScore = Math.min(100,
+        Math.min(25, pkg.moduleCount * 5) +        // up to 25pts for 5+ modules
+        Math.min(25, pkg.testCount * 5) +           // up to 25pts for 5+ tests
+        (hasDescription ? 20 : 0) +
+        (hasStorage ? 15 : 0) +
+        (hasVersion ? 15 : 0)
+      );
+
+      // 6. Teaching quality: proficiency level + description depth + examples/capabilities
+      const profBonus = ({ beginner: 15, intermediate: 20, advanced: 25, expert: 30 } as Record<string, number>)[pkg.proficiencyLevel] ?? 15;
+      const descDepth = Math.min(30, Math.floor((pkg.description?.length ?? 0) / 50) * 5); // 5pts per 50 chars, max 30
+      const capCount = Math.min(20, (pkg.capabilities?.length ?? 0) * 5); // 5pts per capability, max 20
+      const teachingScore = Math.min(100, profBonus + descDepth + capCount + (hasPrereqs ? 20 : 0));
 
       const checks = {
-        compilability: { score: Math.min(100, h(0, 70, 25) + moduleBonus), weight: 20, details: `${pkg.moduleCount} modules compile successfully` },
-        originality: { score: h(4, 55, 40), weight: 15, details: `Content hash ${pkg.rootHash.slice(0, 12)} — uniqueness verified against registry` },
-        categoryMatch: { score: h(8, 75, 20), weight: 15, details: `Content matches declared category: ${pkg.category}` },
-        securityScan: { score: Math.min(100, h(12, 65, 30) + testBonus), weight: 20, details: `${pkg.testCount} test cases, no unsafe patterns detected` },
-        completeness: { score: Math.min(100, h(16, 55, 30) + moduleBonus + testBonus), weight: 15, details: `${pkg.moduleCount} modules, ${pkg.testCount} tests included` },
-        teachingQuality: { score: h(20, 55, 40), weight: 15, details: `Proficiency level: ${pkg.proficiencyLevel}` },
+        compilability: { score: compilabilityScore, weight: 20, details: `${pkg.moduleCount} modules, ${Math.round(sizePerModule)}B avg size${sizeReasonable ? "" : " (unusual size)"}` },
+        originality: { score: originalityScore, weight: 15, details: isDuplicate ? `Duplicate rootHash found in ${dupes!.length} other package(s)` : `Unique content hash verified against registry` },
+        categoryMatch: { score: categoryMatchScore, weight: 15, details: `Category: ${pkg.category}${validCategory ? "" : " (non-standard)"}${hasDescription ? ", description present" : ", no description"}` },
+        securityScan: { score: securityScore, weight: 20, details: `Test ratio: ${testRatio.toFixed(2)}, signature: ${hasSignature ? "valid" : "weak"}${securityFlags.length ? ", flags: " + securityFlags.join(", ") : ""}` },
+        completeness: { score: completenessScore, weight: 15, details: `${pkg.moduleCount} modules, ${pkg.testCount} tests, storage: ${hasStorage ? "yes" : "no"}, version: ${pkg.version}` },
+        teachingQuality: { score: teachingScore, weight: 15, details: `Level: ${pkg.proficiencyLevel}, ${pkg.capabilities?.length ?? 0} capabilities, ${pkg.prerequisites?.length ?? 0} prerequisites` },
       };
 
       const qualityScore = Math.round(
@@ -1154,10 +1206,16 @@ const knowledgeRouter = router({
       // Fair Market Value based on quality, size, and category
       const baseFmv = pkg.moduleCount * 5 + pkg.testCount * 2;
       const qualityMultiplier = qualityScore / 100;
-      const levelMultiplier = { beginner: 0.5, intermediate: 1.0, advanced: 1.5, expert: 2.0 }[pkg.proficiencyLevel] || 1.0;
+      const levelMultiplier = ({ beginner: 0.5, intermediate: 1.0, advanced: 1.5, expert: 2.0 } as Record<string, number>)[pkg.proficiencyLevel] ?? 1.0;
       const fairMarketValue = parseFloat((baseFmv * qualityMultiplier * levelMultiplier).toFixed(6));
 
       const auditId = `aud_${nanoid(24)}`;
+      const reviewNotes: string[] = [];
+      if (isDuplicate) reviewNotes.push("Duplicate content detected");
+      if (securityFlags.length) reviewNotes.push(`Security: ${securityFlags.join(", ")}`);
+      if (qualityScore < 50) reviewNotes.push("Quality score below minimum threshold (50)");
+      if (!validCategory) reviewNotes.push(`Non-standard category: ${pkg.category}`);
+
       await db.createKnowledgeAudit({
         auditId,
         packageId: input.packageId,
@@ -1166,10 +1224,10 @@ const knowledgeRouter = router({
         verdict,
         fairMarketValue: fairMarketValue.toString(),
         checks,
-        securityFlags: [],
+        securityFlags,
         platformSignature: `nervix_sig_${nanoid(32)}`,
-        reviewNotes: verdict === "rejected" ? "Quality score below minimum threshold (50)" : null,
-        auditDurationMs: 1500 + h(24, 500, 3000),
+        reviewNotes: reviewNotes.length > 0 ? reviewNotes.join("; ") : null,
+        auditDurationMs: Date.now() - auditStart,
         expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 90 days
       });
 
