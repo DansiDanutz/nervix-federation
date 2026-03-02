@@ -491,6 +491,165 @@ export async function rotateAccessToken(sessionId: string, newAccessToken: strin
   } as any).eq("sessionId", sessionId));
 }
 
+// ─── Password Reset Tokens ──────────────────────────────────────────────────
+export async function createPasswordResetToken(token: {
+  token: string;
+  email: string;
+  userId?: number;
+  expiresAt: Date;
+  ipAddress?: string;
+  userAgent?: string;
+}) {
+  const row: Record<string, unknown> = {
+    token: token.token,
+    email: token.email,
+    expires_at: token.expiresAt instanceof Date
+      ? token.expiresAt.toISOString()
+      : token.expiresAt,
+  };
+  if (token.userId) row.user_id = token.userId;
+  if (token.ipAddress) row.ip_address = token.ipAddress;
+  if (token.userAgent) row.user_agent = token.userAgent;
+  check(await getDb().from("password_reset_tokens").insert(row));
+  return token;
+}
+
+export async function getPasswordResetToken(token: string) {
+  const { data } = await getDb()
+    .from("password_reset_tokens")
+    .select("*")
+    .eq("token", token)
+    .is("used_at", null)
+    .gte("expires_at", new Date().toISOString())
+    .limit(1);
+  return data && data.length > 0 ? data[0] : undefined;
+}
+
+export async function markPasswordResetTokenUsed(token: string) {
+  check(await getDb()
+    .from("password_reset_tokens")
+    .update({ used_at: new Date().toISOString() } as any)
+    .eq("token", token));
+}
+
+export async function deletePasswordResetToken(token: string) {
+  await getDb().from("password_reset_tokens").delete().eq("token", token);
+}
+
+export async function cleanupExpiredPasswordResetTokens() {
+  const { data } = await getDb().rpc("cleanup_expired_password_reset_tokens");
+  return data as number;
+}
+
+// ─── Email Verification Tokens ───────────────────────────────────────────────
+export async function createEmailVerificationToken(token: {
+  token: string;
+  email: string;
+  userId?: number;
+  openId: string;
+  expiresAt: Date;
+  ipAddress?: string;
+  userAgent?: string;
+}) {
+  const row: Record<string, unknown> = {
+    token: token.token,
+    email: token.email,
+    open_id: token.openId,
+    expires_at: token.expiresAt instanceof Date
+      ? token.expiresAt.toISOString()
+      : token.expiresAt,
+  };
+  if (token.userId) row.user_id = token.userId;
+  if (token.ipAddress) row.ip_address = token.ipAddress;
+  if (token.userAgent) row.user_agent = token.userAgent;
+  check(await getDb().from("email_verification_tokens").insert(row));
+  return token;
+}
+
+export async function getEmailVerificationToken(token: string) {
+  const { data } = await getDb()
+    .from("email_verification_tokens")
+    .select("*")
+    .eq("token", token)
+    .is("verified_at", null)
+    .gte("expires_at", new Date().toISOString())
+    .limit(1);
+  return data && data.length > 0 ? data[0] : undefined;
+}
+
+export async function markEmailVerificationTokenVerified(token: string) {
+  check(await getDb()
+    .from("email_verification_tokens")
+    .update({ verified_at: new Date().toISOString() } as any)
+    .eq("token", token));
+}
+
+export async function deleteEmailVerificationToken(token: string) {
+  await getDb().from("email_verification_tokens").delete().eq("token", token);
+}
+
+export async function cleanupExpiredEmailVerificationTokens() {
+  const { data } = await getDb().rpc("cleanup_expired_email_verification_tokens");
+  return data as number;
+}
+
+// ─── Security Events ─────────────────────────────────────────────────────────
+export async function logSecurityEvent(params: {
+  eventType: string;
+  severity?: "info" | "warning" | "error" | "critical";
+  actorId?: string;
+  actorType?: string;
+  targetId?: string;
+  targetType?: string;
+  action: string;
+  details?: Record<string, unknown>;
+  ipAddress?: string;
+  userAgent?: string;
+}) {
+  const eventId = await getDb().rpc("create_security_event", {
+    p_event_type: params.eventType,
+    p_severity: params.severity || "info",
+    p_actor_id: params.actorId || null,
+    p_actor_type: params.actorType || "system",
+    p_target_id: params.targetId || null,
+    p_target_type: params.targetType || null,
+    p_action: params.action,
+    p_details: params.details || null,
+    p_ip_address: params.ipAddress || null,
+    p_user_agent: params.userAgent || null,
+  });
+  return eventId;
+}
+
+export async function listSecurityEvents(filters?: {
+  eventType?: string;
+  severity?: string;
+  actorId?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const limit = filters?.limit || 50;
+  const offset = filters?.offset || 0;
+  let query = getDb().from("security_events").select("*", { count: "exact" });
+  if (filters?.eventType) query = query.eq("event_type", filters.eventType);
+  if (filters?.severity) query = query.eq("severity", filters.severity);
+  if (filters?.actorId) query = query.eq("actor_id", filters.actorId);
+  query = (query as any).order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+  const { data, count, error } = await query;
+  if (error) throw new Error(error.message);
+  return { events: data || [], total: count || 0 };
+}
+
+export async function cleanupOldSecurityEvents() {
+  const { data } = await getDb().rpc("cleanup_old_security_events");
+  return data as number;
+}
+
+export async function cleanupExpiredTokens() {
+  const { data } = await getDb().rpc("cleanup_expired_tokens");
+  return data as { password_reset_tokens: number; email_verification_tokens: number; total: number };
+}
+
 // ─── Federation Config ───────────────────────────────────────────────────────
 export async function setFederationConfig(key: string, value: unknown, description?: string) {
   check(await getDb().from("federation_config").upsert(

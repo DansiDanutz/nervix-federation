@@ -9,7 +9,6 @@ import crypto from "crypto";
 import { authLimiter, passwordResetLimiter } from "./rateLimit";
 import { sendPasswordResetEmail, sendWelcomeEmail, sendVerificationEmail } from "./email";
 import { validatePassword, calculatePasswordStrength, DEFAULT_PASSWORD_REQUIREMENTS } from "./passwordValidation";
-import { logSecurityEvent } from "./securityMiddleware";
 
 const BCRYPT_COST = 12;
 
@@ -32,12 +31,9 @@ async function verifyPassword(password: string, hash: string): Promise<boolean> 
   return hash === legacyHash;
 }
 
-// In-memory reset token store (fine for MVP — use DB/Redis in v3)
-const resetTokens = new Map<string, { email: string; expires: number }>();
-
-// Email verification token store
-const verifyTokens = new Map<string, { email: string; openId: string; expires: number }>();
-const resendLimiter = new Map<string, number>(); // email -> last resend timestamp
+// NOTE: Token storage moved to Supabase (Phase 2 Security Hardening)
+// Password reset tokens and email verification tokens are now stored in database
+// Functions: createPasswordResetToken, getPasswordResetToken, etc. in ../db.ts
 
 export function registerAuthRoutes(app: Express) {
 
@@ -103,16 +99,29 @@ export function registerAuthRoutes(app: Express) {
 
       // Send email verification
       const vToken = "vt_" + nanoid(32);
-      verifyTokens.set(vToken, { email, openId, expires: Date.now() + 24 * 60 * 60 * 1000 });
-      sendVerificationEmail(email, vToken, name).catch(() => {});
-
-      // Log successful registration
-      const passwordStrength = calculatePasswordStrength(password);
-      logSecurityEvent("register_success", {
+      await db.createEmailVerificationToken({
+        token: vToken,
         email,
         openId,
-        passwordStrength: passwordStrength.label,
-        passwordScore: passwordStrength.score,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+      sendVerificationEmail(email, vToken, name).catch(() => {});
+
+      // Log successful registration to database
+      await db.logSecurityEvent({
+        eventType: "register_success",
+        severity: "info",
+        actorId: openId,
+        actorType: "user",
+        action: "user_registered",
+        details: {
+          email,
+          passwordStrength: calculatePasswordStrength(password).label,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent"),
       });
 
       res.json({ success: true, openId });
@@ -130,7 +139,13 @@ export function registerAuthRoutes(app: Express) {
   app.post("/api/auth/login", authLimiter, async (req: Request, res: Response) => {
     const { email, password } = req.body;
     if (!email || !password) {
-      logSecurityEvent("login_missing_fields", { email });
+      await db.logSecurityEvent({
+        eventType: "login_missing_fields",
+        severity: "warning",
+        action: "login_attempt_missing_fields",
+        details: { email },
+        ipAddress: req.ip,
+      });
       res.status(400).json({ error: "email and password required" });
       return;
     }
@@ -138,14 +153,28 @@ export function registerAuthRoutes(app: Express) {
     try {
       const user = await db.getUserByEmail(email) as any;
       if (!user) {
-        logSecurityEvent("login_user_not_found", { email });
+        await db.logSecurityEvent({
+          eventType: "login_user_not_found",
+          severity: "info",
+          action: "login_attempt_user_not_found",
+          details: { email },
+          ipAddress: req.ip,
+        });
         res.status(401).json({ error: "Invalid email or password" });
         return;
       }
 
       const isValid = await verifyPassword(password, user.passwordHash || "");
       if (!isValid) {
-        logSecurityEvent("login_invalid_password", { email, userId: user.openId });
+        await db.logSecurityEvent({
+          eventType: "login_invalid_password",
+          severity: "warning",
+          actorId: user.openId,
+          actorType: "user",
+          action: "login_attempt_invalid_password",
+          details: { email },
+          ipAddress: req.ip,
+        });
         res.status(401).json({ error: "Invalid email or password" });
         return;
       }
@@ -156,28 +185,55 @@ export function registerAuthRoutes(app: Express) {
         console.log("[Auth] Migrating legacy SHA256 password to bcrypt for:", email);
         const newHash = await hashPassword(password);
         await db.upsertUser({ ...user, passwordHash: newHash } as any);
-        logSecurityEvent("password_migrated", { email, userId: user.openId });
+        await db.logSecurityEvent({
+          eventType: "password_migrated",
+          severity: "info",
+          actorId: user.openId,
+          actorType: "user",
+          action: "password_migration_sha256_to_bcrypt",
+          details: { email },
+        });
       }
 
       const token = await createSessionToken(user.openId, { name: user.name || "" });
       res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(req), maxAge: ONE_YEAR_MS });
 
-      logSecurityEvent("login_success", { email, userId: user.openId });
+      await db.logSecurityEvent({
+        eventType: "login_success",
+        severity: "info",
+        actorId: user.openId,
+        actorType: "user",
+        action: "user_logged_in",
+        details: { email },
+        ipAddress: req.ip,
+      });
       res.json({ success: true });
     } catch (error) {
       console.error("[Auth] Login failed:", error);
-      logSecurityEvent("login_failed", {
-        email,
-        error: error instanceof Error ? error.message : String(error),
+      await db.logSecurityEvent({
+        eventType: "login_failed",
+        severity: "error",
+        action: "login_failed",
+        details: {
+          email,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        ipAddress: req.ip,
       });
       res.status(500).json({ error: "Login failed" });
     }
   });
 
   // ─── Logout ──────────────────────────────────────────────────────────────
-  app.post("/api/auth/logout", (req: Request, res: Response) => {
+  app.post("/api/auth/logout", async (req: Request, res: Response) => {
     const cookie = req.cookies?.[process.env.COOKIE_NAME || "NERVIX_SESSION"];
-    logSecurityEvent("logout", { hasSession: !!cookie });
+    await db.logSecurityEvent({
+      eventType: "logout",
+      severity: "info",
+      action: "user_logged_out",
+      details: { hasSession: !!cookie },
+      ipAddress: req.ip,
+    });
     res.clearCookie(COOKIE_NAME, getSessionCookieOptions(req));
     res.json({ success: true });
   });
@@ -190,14 +246,27 @@ export function registerAuthRoutes(app: Express) {
       return;
     }
 
-    logSecurityEvent("forgot_password_requested", { email });
+    await db.logSecurityEvent({
+      eventType: "forgot_password_requested",
+      severity: "info",
+      action: "password_reset_requested",
+      details: { email },
+      ipAddress: req.ip,
+    });
 
     try {
       const user = await db.getUserByEmail(email) as any;
       // Always return success (don't reveal if email exists)
       if (user) {
         const token = nanoid(48);
-        resetTokens.set(token, { email, expires: Date.now() + 60 * 60 * 1000 }); // 1 hour
+        await db.createPasswordResetToken({
+          token,
+          email,
+          userId: user.id,
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+          ipAddress: req.ip,
+          userAgent: req.get("user-agent"),
+        });
         await sendPasswordResetEmail(email, token, user.name).catch(err => {
           console.error("[Auth] Failed to send reset email:", err);
         });
@@ -205,9 +274,15 @@ export function registerAuthRoutes(app: Express) {
       res.json({ success: true, message: "If that email is registered, you'll receive a reset link shortly." });
     } catch (error) {
       console.error("[Auth] Forgot password failed:", error);
-      logSecurityEvent("forgot_password_failed", {
-        email,
-        error: error instanceof Error ? error.message : String(error),
+      await db.logSecurityEvent({
+        eventType: "forgot_password_failed",
+        severity: "error",
+        action: "password_reset_failed",
+        details: {
+          email,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        ipAddress: req.ip,
       });
       res.status(500).json({ error: "Request failed" });
     }
@@ -224,7 +299,13 @@ export function registerAuthRoutes(app: Express) {
     // Validate password with stronger requirements
     const passwordValidation = validatePassword(password);
     if (!passwordValidation.valid) {
-      logSecurityEvent("reset_password_weak_password", { errors: passwordValidation.errors });
+      await db.logSecurityEvent({
+        eventType: "reset_password_weak_password",
+        severity: "warning",
+        action: "password_reset_weak_password",
+        details: { errors: passwordValidation.errors },
+        ipAddress: req.ip,
+      });
       res.status(400).json({
         error: "Password does not meet security requirements",
         requirements: {
@@ -239,10 +320,15 @@ export function registerAuthRoutes(app: Express) {
       return;
     }
 
-    const entry = resetTokens.get(token);
-    if (!entry || Date.now() > entry.expires) {
-      resetTokens.delete(token);
-      logSecurityEvent("reset_password_invalid_token", { email: entry?.email });
+    const entry = await db.getPasswordResetToken(token);
+    if (!entry) {
+      await db.logSecurityEvent({
+        eventType: "reset_password_invalid_token",
+        severity: "warning",
+        action: "password_reset_invalid_token",
+        details: { token: token.substring(0, 10) + "..." },
+        ipAddress: req.ip,
+      });
       res.status(400).json({ error: "Reset link is invalid or expired. Please request a new one." });
       return;
     }
@@ -256,19 +342,33 @@ export function registerAuthRoutes(app: Express) {
 
       const passwordHash = await hashPassword(password);
       await db.upsertUser({ ...user, passwordHash } as any);
-      resetTokens.delete(token);
+      await db.markPasswordResetTokenUsed(token);
 
       // Auto-login after reset
       const sessionToken = await createSessionToken(user.openId, { name: user.name || "" });
       res.cookie(COOKIE_NAME, sessionToken, { ...getSessionCookieOptions(req), maxAge: ONE_YEAR_MS });
 
-      logSecurityEvent("reset_password_success", { email: entry.email, userId: user.openId });
+      await db.logSecurityEvent({
+        eventType: "reset_password_success",
+        severity: "info",
+        actorId: user.openId,
+        actorType: "user",
+        action: "password_reset_success",
+        details: { email: entry.email },
+        ipAddress: req.ip,
+      });
       res.json({ success: true, message: "Password updated! You're now logged in." });
     } catch (error) {
       console.error("[Auth] Reset password failed:", error);
-      logSecurityEvent("reset_password_failed", {
-        email: entry?.email,
-        error: error instanceof Error ? error.message : String(error),
+      await db.logSecurityEvent({
+        eventType: "reset_password_failed",
+        severity: "error",
+        action: "password_reset_failed",
+        details: {
+          email: entry?.email,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        ipAddress: req.ip,
       });
       res.status(500).json({ error: "Reset failed" });
     }
@@ -282,24 +382,43 @@ export function registerAuthRoutes(app: Express) {
       return;
     }
 
-    const entry = verifyTokens.get(token);
-    if (!entry || Date.now() > entry.expires) {
-      verifyTokens.delete(token);
-      logSecurityEvent("email_verify_invalid_token", { token });
+    const entry = await db.getEmailVerificationToken(token);
+    if (!entry) {
+      await db.logSecurityEvent({
+        eventType: "email_verify_invalid_token",
+        severity: "warning",
+        action: "email_verify_invalid_token",
+        details: { token: token.substring(0, 10) + "..." },
+        ipAddress: req.ip,
+      });
       res.redirect("/verify-email?error=expired");
       return;
     }
 
     try {
-      await (db.getDb() as any).from("users").update({ emailVerified: true }).eq("openId", entry.openId);
-      verifyTokens.delete(token);
-      logSecurityEvent("email_verify_success", { email: entry.email, userId: entry.openId });
+      await (db.getDb() as any).from("users").update({ emailVerified: true }).eq("openId", entry.open_id);
+      await db.markEmailVerificationTokenVerified(token);
+      await db.logSecurityEvent({
+        eventType: "email_verify_success",
+        severity: "info",
+        actorId: entry.open_id,
+        actorType: "user",
+        action: "email_verified",
+        details: { email: entry.email },
+        ipAddress: req.ip,
+      });
       res.redirect("/verify-email?success=1");
     } catch(err) {
       console.error("[Auth] Email verify failed:", err);
-      logSecurityEvent("email_verify_failed", {
-        email: entry?.email,
-        error: err instanceof Error ? err.message : String(err),
+      await db.logSecurityEvent({
+        eventType: "email_verify_failed",
+        severity: "error",
+        action: "email_verify_failed",
+        details: {
+          email: entry?.email,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        ipAddress: req.ip,
       });
       res.redirect("/verify-email?error=failed");
     }
