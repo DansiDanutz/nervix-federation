@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://nervix.ai/</loc><priority>1.0</priority><changefreq>weekly</changefreq></url>
+  <url><loc>https://nervix.ai/docs</loc><priority>0.9</priority><changefreq>weekly</changefreq></url>
+  <url><loc>https://nervix.ai/agents</loc><priority>0.8</priority><changefreq>daily</changefreq></url>
+  <url><loc>https://nervix.ai/marketplace</loc><priority>0.8</priority><changefreq>daily</changefreq></url>
+  <url><loc>https://nervix.ai/leaderboard</loc><priority>0.7</priority><changefreq>daily</changefreq></url>
+  <url><loc>https://nervix.ai/fleet</loc><priority>0.7</priority><changefreq>daily</changefreq></url>
+  <url><loc>https://nervix.ai/barter</loc><priority>0.7</priority><changefreq>daily</changefreq></url>
+  <url><loc>https://nervix.ai/escrow</loc><priority>0.6</priority><changefreq>weekly</changefreq></url>
+  <url><loc>https://nervix.ai/how-it-works</loc><priority>0.6</priority><changefreq>monthly</changefreq></url>
+  <url><loc>https://nervix.ai/guide</loc><priority>0.6</priority><changefreq>monthly</changefreq></url>
+  <url><loc>https://nervix.ai/login</loc><priority>0.3</priority><changefreq>monthly</changefreq></url>
+</urlset>

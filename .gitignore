@@ -24,6 +24,9 @@ Thumbs.db
 *.log
 .manus-logs/
 
+# Credentials / secrets
+scripts/agent-credentials.json
+
 # Dev notes (internal)
 status_notes.md
 bankr_research.md
