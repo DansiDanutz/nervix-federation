@@ -47,7 +47,7 @@ export const adminProcedure = t.procedure.use(
 
 // Agent Bearer Token auth — validates `Authorization: Bearer at_xxx` from agent_sessions
 const requireAgent = t.middleware(async ({ ctx, next }) => {
-  const authHeader = ctx.req.headers.authorization;
+  const authHeader = ctx.req?.headers?.authorization;
   if (!authHeader?.startsWith("Bearer at_")) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: "Missing or invalid agent token" });
   }

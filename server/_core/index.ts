@@ -55,6 +55,10 @@ async function startServer() {
   registerMetricsRoute(app);
   // SSE endpoint for live dashboard updates
   registerSSERoute(app);
+  // Health check endpoint for Docker HEALTHCHECK (no rate limit)
+  app.get("/health", (_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString(), uptime: process.uptime() });
+  });
   // Global API rate limiter
   app.use("/api", apiLimiter);
   // Auth routes (register + login)
@@ -77,6 +81,7 @@ async function startServer() {
       createContext,
     })
   );
+
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
