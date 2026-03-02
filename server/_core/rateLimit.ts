@@ -36,3 +36,21 @@ export const passwordResetLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// Economy transfers: 20 per minute per IP
+export const transferLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  message: { error: "Too many transfer requests. Slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// A2A messaging: 50 per minute per IP
+export const a2aLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 50,
+  message: { error: "Too many A2A messages. Slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});

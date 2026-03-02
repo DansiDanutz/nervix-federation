@@ -9,8 +9,9 @@
  * 5. Session cleanup — delete expired sessions (every 1 hour)
  */
 import crypto from "crypto";
-import { getDb } from "./db";
+import { getDb, getAgentById } from "./db";
 import { alertAgentsOffline, alertTaskTimeout, alertWebhookDead } from "./telegram-alerts";
+import { deliverWebhook } from "./webhook-delivery";
 
 const MAX_WEBHOOK_RETRIES = 3;
 const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
@@ -196,6 +197,38 @@ async function retryFailedWebhooks() {
   }
 }
 
+// ─── Job 4b: Deliver stale "queued" messages (crash recovery) ────────────────
+async function deliverStaleQueued() {
+  try {
+    const db = getDb();
+    const thirtySecAgo = new Date(Date.now() - 30_000).toISOString();
+    const { data: staleMessages, error } = await db
+      .from("a2a_messages")
+      .select("messageId, method, toAgentId, payload, taskId, fromAgentId")
+      .eq("status", "queued")
+      .lt("createdAt", thirtySecAgo)
+      .order("createdAt", { ascending: true })
+      .limit(10);
+    if (error) throw error;
+    if (!staleMessages || staleMessages.length === 0) return;
+
+    for (const msg of staleMessages) {
+      await deliverWebhook(msg.messageId, msg.toAgentId, {
+        messageId: msg.messageId,
+        method: msg.method,
+        payload: msg.payload,
+        taskId: msg.taskId,
+        fromAgentId: msg.fromAgentId,
+        toAgentId: msg.toAgentId,
+        timestamp: Date.now(),
+      });
+    }
+    log("queued-delivery", `Attempted delivery for ${staleMessages.length} stale queued messages`);
+  } catch (e: any) {
+    log("queued-delivery", `Error: ${e.message}`);
+  }
+}
+
 // ─── Job 5: Clean up expired sessions ───────────────────────────────────────
 async function cleanupExpiredSessions() {
   try {
@@ -230,6 +263,9 @@ export function startScheduledJobs() {
   // Job 4: Webhook retry — every 1 minute
   setInterval(retryFailedWebhooks, 60 * 1000);
 
+  // Job 4b: Deliver stale queued messages — every 30 seconds
+  setInterval(deliverStaleQueued, 30 * 1000);
+
   // Job 5: Session cleanup — every 1 hour
   setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
 
@@ -242,7 +278,7 @@ export function startScheduledJobs() {
   setInterval(pollAgentMailInbox, 5 * 60 * 1000);
   pollAgentMailInbox(); // check immediately on startup
 
-  log("init", "All 6 scheduled jobs started");
+  log("init", "All 7 scheduled jobs started");
 }
 
 // ─── Job 6: AgentMail inbox monitor ─────────────────────────────────────────

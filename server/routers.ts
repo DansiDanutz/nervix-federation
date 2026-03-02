@@ -14,6 +14,7 @@ import * as clawHub from "./clawhub-publisher";
 import { broadcastEvent } from "./sse";
 import { alertLargeTransfer } from "./telegram-alerts";
 import { getMetricCounters } from "./metrics";
+import { deliverWebhook } from "./webhook-delivery";
 
 // ─── Fee Calculation Helper ────────────────────────────────────────────────
 function calculateFee(amount: number, feePercent: number, isOpenClaw: boolean = false): { fee: number; netAmount: number; discount: number } {
@@ -201,7 +202,10 @@ const agentsRouter = router({
 
   updateCard: agentProcedure
     .input(z.object({
-      agentCard: z.record(z.string(), z.unknown()),
+      agentCard: z.record(z.string(), z.unknown()).refine(
+        (v) => JSON.stringify(v).length <= 5000,
+        { message: "agentCard must be under 5000 characters" }
+      ),
     }))
     .mutation(async ({ input, ctx }) => {
       const agent = await db.getAgentById(ctx.agentId);
@@ -544,9 +548,10 @@ const tasksRouter = router({
           activeTasks: (await db.getAgentById(assigneeId))!.activeTasks + 1,
         });
 
-        // Create A2A message for task dispatch
+        // Create A2A message for task dispatch and deliver via webhook
+        const msgId = `msg_${nanoid(20)}`;
         await db.createA2AMessage({
-          messageId: `msg_${nanoid(20)}`,
+          messageId: msgId,
           method: "tasks/send",
           fromAgentId: requesterId,
           toAgentId: assigneeId,
@@ -554,6 +559,17 @@ const tasksRouter = router({
           payload: { title: input.title, description: input.description, artifacts: input.inputArtifacts },
           status: "queued",
         });
+
+        // Attempt immediate webhook delivery (failures go to retry queue)
+        deliverWebhook(msgId, assigneeId, {
+          messageId: msgId,
+          method: "tasks/send",
+          payload: { title: input.title, description: input.description, artifacts: input.inputArtifacts },
+          taskId,
+          fromAgentId: requesterId,
+          toAgentId: assigneeId,
+          timestamp: Date.now(),
+        }).catch(() => {}); // fire-and-forget, retry job handles failures
       }
 
       await db.createAuditEntry({
@@ -967,10 +983,13 @@ const federationRouter = router({
 const a2aRouter = router({
   send: agentProcedure
     .input(z.object({
-      method: z.string(),
+      method: z.string().max(255),
       toAgentId: z.string(),
       taskId: z.string().optional(),
-      payload: z.record(z.string(), z.unknown()),
+      payload: z.record(z.string(), z.unknown()).refine(
+        (v) => JSON.stringify(v).length <= 10000,
+        { message: "payload must be under 10000 characters" }
+      ),
     }))
     .mutation(async ({ input, ctx }) => {
       const messageId = `msg_${nanoid(20)}`;
@@ -984,49 +1003,16 @@ const a2aRouter = router({
         status: "queued",
       });
 
-      // Route based on method — deliver via webhook with HMAC signature
-      if (input.method === "tasks/send" && input.toAgentId) {
-        const agent = await db.getAgentById(input.toAgentId);
-        if (agent?.webhookUrl) {
-          try {
-            const body = JSON.stringify({
-              messageId,
-              method: input.method,
-              payload: input.payload,
-              taskId: input.taskId ?? null,
-              fromAgentId: ctx.agentId,
-              toAgentId: input.toAgentId,
-              timestamp: Date.now(),
-            });
-            const headers: Record<string, string> = { "Content-Type": "application/json" };
-            if (agent.webhookSecret) {
-              headers["X-Nervix-Signature"] = crypto
-                .createHmac("sha256", agent.webhookSecret)
-                .update(body)
-                .digest("hex");
-            }
-            const res = await fetch(agent.webhookUrl, {
-              method: "POST",
-              headers,
-              body,
-              signal: AbortSignal.timeout(10_000),
-            });
-            if (res.ok) {
-              await db.updateA2AMessage(messageId, { status: "delivered", deliveredAt: new Date() });
-            } else {
-              await db.updateA2AMessage(messageId, {
-                status: "failed",
-                errorMessage: `Webhook returned HTTP ${res.status}`,
-              });
-            }
-          } catch (err: any) {
-            await db.updateA2AMessage(messageId, {
-              status: "failed",
-              errorMessage: err.message || "Webhook delivery failed",
-            });
-          }
-        }
-      }
+      // Deliver via webhook (all methods, not just tasks/send)
+      deliverWebhook(messageId, input.toAgentId, {
+        messageId,
+        method: input.method,
+        payload: input.payload,
+        taskId: input.taskId ?? null,
+        fromAgentId: ctx.agentId,
+        toAgentId: input.toAgentId,
+        timestamp: Date.now(),
+      }).catch(() => {}); // fire-and-forget, retry job handles failures
 
       return { messageId, status: "queued" };
     }),

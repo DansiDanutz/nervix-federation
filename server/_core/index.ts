@@ -9,7 +9,7 @@ import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerAuthRoutes } from "./oauth";
-import { apiLimiter } from "./rateLimit";
+import { apiLimiter, enrollmentLimiter, transferLimiter, a2aLimiter } from "./rateLimit";
 import { registerTonAuthRoutes } from "../ton-auth-routes";
 import { registerTelegramAuthRoutes } from "./telegram-auth";
 import { registerYouTubeRoutes } from "../youtube-routes";
@@ -65,6 +65,10 @@ async function startServer() {
   registerTelegramAuthRoutes(app);
   // YouTube multi-tenant routes
   registerYouTubeRoutes(app);
+  // Route-specific rate limiters for sensitive tRPC endpoints
+  app.use("/api/trpc/enrollment", enrollmentLimiter);
+  app.use("/api/trpc/economy.transfer", transferLimiter);
+  app.use("/api/trpc/a2a.send", a2aLimiter);
   // tRPC API
   app.use(
     "/api/trpc",
