@@ -54,8 +54,8 @@ function escapeLike(str: string): string {
 }
 
 /** Retry a Supabase query once after 500ms on 503/504 or timeout */
-async function withRetry<R extends { data: any; error: any }>(fn: () => PromiseLike<R>): Promise<R> {
-  let result: R;
+async function withRetry(fn: () => PromiseLike<any>): Promise<{ data: any; error: any; count: number | null }> {
+  let result: any;
   try {
     result = await fn();
   } catch {

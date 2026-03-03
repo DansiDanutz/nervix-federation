@@ -71,7 +71,7 @@ export async function verifySession(
   cookieValue: string | undefined | null
 ): Promise<{ openId: string; appId: string; name: string } | null> {
   if (!cookieValue) {
-    logger.warn("Auth: missing session cookie");
+    logger.debug("Auth: no session cookie (agent/public request)");
     return null;
   }
 
