@@ -21,6 +21,8 @@ import {
   InsertStripeCheckoutSession,
   InsertStripeSubscription,
   InsertFiatTransaction,
+  InsertAgentThought,
+  InsertBrainAccessLogEntry,
 } from "../drizzle/schema";
 import { logger } from './_core/logger';
 import { ENV } from './_core/env';
@@ -1195,4 +1197,112 @@ export async function deductCreditsFromAgent(agentId: string, credits: string) {
 export async function getFirstAgentIdForUser(userId: number): Promise<string | null> {
   const { data } = await getDb().from("agents").select("agentId").eq("ownerUserId", userId).order("createdAt", { ascending: true }).limit(1).single();
   return data?.agentId || null;
+}
+
+// ─── Brain Layer (Agent Thoughts) ────────────────────────────────────────────
+
+export async function createThought(thought: InsertAgentThought) {
+  const row = {
+    ...thought,
+    metadata: thought.metadata || {},
+    qualityScore: thought.qualityScore || "0.50",
+  };
+  check(await getDb().from("agent_thoughts").insert(row as any));
+  return row;
+}
+
+export async function getThoughtById(id: string) {
+  const { data } = await getDb().from("agent_thoughts").select("*").eq("id", id).limit(1).single();
+  return data || undefined;
+}
+
+export async function listThoughts(
+  agentId: string,
+  opts: { scope?: string; type?: string; limit?: number; offset?: number } = {}
+) {
+  let q = getDb().from("agent_thoughts").select("*").eq("agentId", agentId);
+  if (opts.scope) q = q.eq("scope", opts.scope);
+  if (opts.type) q = q.eq("type", opts.type);
+  q = q.order("createdAt", { ascending: false });
+  if (opts.offset) q = q.range(opts.offset, opts.offset + (opts.limit || 50) - 1);
+  else q = q.limit(opts.limit || 50);
+  const { data } = await q;
+  return data || [];
+}
+
+export async function updateThoughtScope(id: string, agentId: string, scope: string) {
+  check(
+    await getDb()
+      .from("agent_thoughts")
+      .update({ scope, updatedAt: new Date().toISOString() })
+      .eq("id", id)
+      .eq("agentId", agentId)
+  );
+}
+
+export async function deleteThought(id: string, agentId: string) {
+  check(
+    await getDb()
+      .from("agent_thoughts")
+      .delete()
+      .eq("id", id)
+      .eq("agentId", agentId)
+  );
+}
+
+export async function searchThoughtsRpc(
+  queryEmbedding: number[],
+  targetAgentId: string | null,
+  targetScope: string | null,
+  matchThreshold: number = 0.7,
+  matchCount: number = 10,
+  filterMetadata: Record<string, unknown> = {}
+) {
+  const { data, error } = await getDb().rpc("match_agent_thoughts", {
+    query_embedding: queryEmbedding,
+    target_agent_id: targetAgentId,
+    target_scope: targetScope,
+    match_threshold: matchThreshold,
+    match_count: matchCount,
+    filter_metadata: filterMetadata,
+  });
+  if (error) {
+    logger.error({ err: error }, "Brain search failed");
+    throw new Error("Brain search failed");
+  }
+  return data || [];
+}
+
+export async function getBrainStats(agentId: string | null) {
+  const { data, error } = await getDb().rpc("get_brain_stats", {
+    target_agent_id: agentId,
+  });
+  if (error) {
+    logger.error({ err: error }, "Brain stats failed");
+    throw new Error("Brain stats failed");
+  }
+  return data?.[0] || null;
+}
+
+export async function logBrainAccess(entry: InsertBrainAccessLogEntry) {
+  check(await getDb().from("brain_access_log").insert(entry as any));
+}
+
+export async function updateThoughtEmbedding(id: string, embedding: number[]) {
+  // Use raw SQL via rpc since Supabase JS client doesn't natively handle vector type
+  const { error } = await getDb().rpc("update_thought_embedding" as any, {
+    thought_id: id,
+    new_embedding: embedding,
+  });
+  if (error) {
+    // Fallback: update via direct column (works if supabase-js handles vector as array)
+    const { error: err2 } = await getDb()
+      .from("agent_thoughts")
+      .update({ embedding: embedding as any, updatedAt: new Date().toISOString() })
+      .eq("id", id);
+    if (err2) {
+      logger.error({ err: err2 }, "Failed to update thought embedding");
+      throw new Error("Failed to update thought embedding");
+    }
+  }
 }

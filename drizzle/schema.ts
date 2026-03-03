@@ -10,6 +10,7 @@ import {
   numeric,
   bigint,
   serial,
+  uuid,
 } from "drizzle-orm/pg-core";
 
 // ─── Enum Definitions ──────────────────────────────────────────────────────
@@ -526,3 +527,59 @@ export const fiatTransactions = pgTable("fiat_transactions", {
 
 export type FiatTransaction = typeof fiatTransactions.$inferSelect;
 export type InsertFiatTransaction = typeof fiatTransactions.$inferInsert;
+
+// ─── Brain Layer Enums ────────────────────────────────────────────────────────
+
+export const thoughtTypeEnum = pgEnum("thought_type", [
+  "learning", "pattern", "solution", "insight", "reference", "debug_note"
+]);
+
+export const thoughtScopeEnum = pgEnum("thought_scope", [
+  "private", "federation", "marketplace"
+]);
+
+export const thoughtSourceEnum = pgEnum("thought_source", [
+  "task_completion", "manual", "a2a", "telegram", "mcp"
+]);
+
+// ─── Agent Thoughts Table (NERVIX Brain) ──────────────────────────────────────
+
+export const agentThoughts = pgTable("agent_thoughts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  agentId: varchar("agentId", { length: 64 }).notNull(),
+  content: text("content").notNull(),
+  // embedding: vector(1536) — managed via raw SQL (pgvector not in drizzle-orm)
+  type: thoughtTypeEnum("type").default("learning").notNull(),
+  scope: thoughtScopeEnum("scope").default("private").notNull(),
+  source: thoughtSourceEnum("source").default("manual").notNull(),
+  metadata: jsonb("metadata").$type<{
+    topics?: string[];
+    related_tasks?: string[];
+    skills?: string[];
+    quality_score?: number;
+    people?: string[];
+    action_items?: string[];
+    dates_mentioned?: string[];
+  }>().default({}).notNull(),
+  qualityScore: numeric("qualityScore", { precision: 3, scale: 2 }).default("0.50").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+
+export type AgentThought = typeof agentThoughts.$inferSelect;
+export type InsertAgentThought = typeof agentThoughts.$inferInsert;
+
+// ─── Brain Access Log ─────────────────────────────────────────────────────────
+
+export const brainAccessLog = pgTable("brain_access_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  requesterId: varchar("requesterId", { length: 64 }).notNull(),
+  targetAgentId: varchar("targetAgentId", { length: 64 }),
+  query: text("query").notNull(),
+  resultsCount: integer("resultsCount").default(0).notNull(),
+  creditCost: numeric("creditCost", { precision: 10, scale: 2 }).default("0").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type BrainAccessLogEntry = typeof brainAccessLog.$inferSelect;
+export type InsertBrainAccessLogEntry = typeof brainAccessLog.$inferInsert;

@@ -15,6 +15,7 @@ import { apiLimiter, enrollmentLimiter, transferLimiter, a2aLimiter } from "./ra
 import { registerTonAuthRoutes } from "../ton-auth-routes";
 import { registerTelegramAuthRoutes } from "./telegram-auth";
 import { registerYouTubeRoutes } from "../youtube-routes";
+import mcpA2aRouter from "../mcp-a2a-routes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -80,6 +81,7 @@ async function startServer() {
   registerTelegramAuthRoutes(app);
   // YouTube multi-tenant routes
   registerYouTubeRoutes(app);
+  app.use("/api", mcpA2aRouter); // MCP + A2A protocol compliance
   // Route-specific rate limiters for sensitive tRPC endpoints
   app.use("/api/trpc/enrollment", enrollmentLimiter);
   app.use("/api/trpc/economy.transfer", transferLimiter);
