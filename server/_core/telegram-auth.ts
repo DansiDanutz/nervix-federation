@@ -10,6 +10,7 @@ import crypto from "crypto";
 import { nanoid } from "nanoid";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
+import { logger } from "./logger";
 import { createSessionToken } from "./sdk";
 import { sendWelcomeEmail } from "./email";
 import { authLimiter } from "./rateLimit";
@@ -143,7 +144,7 @@ export function registerTelegramAuthRoutes(app: Express) {
         },
       });
     } catch (error) {
-      console.error("[TelegramAuth] Failed:", error);
+      logger.error({ err: error }, "TelegramAuth: failed");
       res.status(500).json({ error: "Authentication failed" });
     }
   });

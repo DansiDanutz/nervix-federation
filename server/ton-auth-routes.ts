@@ -227,7 +227,7 @@ export function registerTonAuthRoutes(app: Express) {
         if (fullUser) {
           linkedAgentIds = await db.propagateWalletToOwnedAgents(fullUser.id, result.address);
           if (linkedAgentIds.length > 0) {
-            console.log(`[TonAuth] Auto-linked wallet to ${linkedAgentIds.length} agent(s) on link: ${linkedAgentIds.join(", ")}`);
+            logger.info("TonAuth: auto-linked wallet to %d agent(s) on link: %s", linkedAgentIds.length, linkedAgentIds.join(", "));
             await db.createAuditEntry({
               eventId: `evt_${nanoid(16)}`,
               eventType: "wallet.auto_linked_agents",
@@ -239,7 +239,7 @@ export function registerTonAuthRoutes(app: Express) {
           }
         }
       } catch (err) {
-        console.warn("[TonAuth] Failed to auto-link wallet to agents on link:", err);
+        logger.warn({ err }, "TonAuth: failed to auto-link wallet to agents on link");
       }
 
       res.json({
@@ -248,7 +248,7 @@ export function registerTonAuthRoutes(app: Express) {
         linkedAgents: linkedAgentIds,
       });
     } catch (error) {
-      console.error("[TonAuth] Link failed:", error);
+      logger.error({ err: error }, "TonAuth: link failed");
       res.status(500).json({ error: "Failed to link wallet" });
     }
   });

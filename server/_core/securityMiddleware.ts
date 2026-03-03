@@ -12,6 +12,7 @@
 import helmet from "helmet";
 import cors from "cors";
 import type { Request, Response, NextFunction } from "express";
+import { logger } from "./logger";
 
 /**
  * Configure Helmet for security headers
@@ -181,7 +182,7 @@ export function logSecurityEvent(eventType: string, details: any): void {
     details,
   };
 
-  console.log(`[SECURITY] ${JSON.stringify(logEntry)}`);
+  logger.info(logEntry, "Security event: %s", eventType);
 
   // TODO: Add to Supabase audit log table
   // await db.createAuditEntry({ eventType: `security.${eventType}`, ... });

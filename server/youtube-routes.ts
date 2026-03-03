@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import * as db from "./db";
+import { logger } from "./_core/logger";
 import { authenticateRequest } from "./_core/sdk";
 
 const YOUTUBE_SCOPES = [
@@ -175,7 +176,7 @@ export function registerYouTubeRoutes(app: Express) {
 
       res.redirect("/dashboard?youtube=connected");
     } catch (err: any) {
-      console.error("[YouTube] OAuth callback failed:", err);
+      logger.error({ err }, "YouTube: OAuth callback failed");
       res.redirect(`/dashboard?error=youtube_failed&message=${encodeURIComponent(err.message)}`);
     }
   });
@@ -230,7 +231,7 @@ export function registerYouTubeRoutes(app: Express) {
       const videos = await syncChannelVideos(channel, accessToken);
       res.json({ success: true, synced: videos.length, channel: channelInfo });
     } catch (err: any) {
-      console.error("[YouTube] Sync failed:", err);
+      logger.error({ err }, "YouTube: sync failed");
       res.status(500).json({ error: err.message || "Sync failed" });
     }
   });

@@ -6,6 +6,7 @@ import { SignJWT, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV } from "./env";
+import { logger } from "./logger";
 
 // Utility function
 const isNonEmptyString = (value: unknown): value is string =>
@@ -70,7 +71,7 @@ export async function verifySession(
   cookieValue: string | undefined | null
 ): Promise<{ openId: string; appId: string; name: string } | null> {
   if (!cookieValue) {
-    console.warn("[Auth] Missing session cookie");
+    logger.warn("Auth: missing session cookie");
     return null;
   }
 
@@ -86,7 +87,7 @@ export async function verifySession(
       !isNonEmptyString(appId) ||
       !isNonEmptyString(name)
     ) {
-      console.warn("[Auth] Session payload missing required fields");
+      logger.warn("Auth: session payload missing required fields");
       return null;
     }
 
@@ -96,7 +97,7 @@ export async function verifySession(
       name,
     };
   } catch (error) {
-    console.warn("[Auth] Session verification failed", String(error));
+    logger.warn({ err: error }, "Auth: session verification failed");
     return null;
   }
 }

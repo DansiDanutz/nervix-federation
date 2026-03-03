@@ -8,6 +8,7 @@
  */
 
 import { ENV } from "./_core/env";
+import { logger } from "./_core/logger";
 import { beginCell, Address } from "@ton/ton";
 
 // ─── Op Codes (must match nervix_escrow.fc) ─────────────────────
@@ -230,7 +231,7 @@ export async function getContractInfo(): Promise<EscrowInfo | null> {
     const data = await response.json();
 
     if (!data.ok) {
-      console.warn("[TON Escrow] Failed to get contract info:", data.error);
+      logger.warn("TON Escrow: failed to get contract info: %s", data.error);
       return null;
     }
 
@@ -247,7 +248,7 @@ export async function getContractInfo(): Promise<EscrowInfo | null> {
       treasuryBalance: stack[6]?.[1] || "0",
     };
   } catch (error) {
-    console.error("[TON Escrow] Error fetching contract info:", error);
+    logger.error({ err: error }, "TON Escrow: error fetching contract info");
     return null;
   }
 }
@@ -300,7 +301,7 @@ export async function getEscrowById(
       deadline: parseInt(stack[6]?.[1] || "0", 16),
     };
   } catch (error) {
-    console.error("[TON Escrow] Error fetching escrow:", error);
+    logger.error({ err: error }, "TON Escrow: error fetching escrow");
     return null;
   }
 }
@@ -322,7 +323,7 @@ export async function getTreasuryWalletBalance(walletAddress: string): Promise<{
     const data = await response.json();
 
     if (!data.ok) {
-      console.warn("[TON Escrow] Failed to get wallet balance:", data.error);
+      logger.warn("TON Escrow: failed to get wallet balance: %s", data.error);
       return null;
     }
 
@@ -343,7 +344,7 @@ export async function getTreasuryWalletBalance(walletAddress: string): Promise<{
       status: infoData.ok ? (infoData.result?.state || "unknown") : "unknown",
     };
   } catch (error) {
-    console.error("[TON Escrow] Error fetching wallet balance:", error);
+    logger.error({ err: error }, "TON Escrow: error fetching wallet balance");
     return null;
   }
 }
@@ -373,7 +374,7 @@ export async function getTreasuryInfo(): Promise<{
       totalFeesCollected: stack[1]?.[1] || "0",
     };
   } catch (error) {
-    console.error("[TON Escrow] Error fetching treasury info:", error);
+    logger.error({ err: error }, "TON Escrow: error fetching treasury info");
     return null;
   }
 }

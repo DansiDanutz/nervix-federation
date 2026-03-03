@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import fs from "fs";
 import { type Server } from "http";
 import path from "path";
+import { logger } from "./logger";
 
 export async function setupVite(app: Express, server: Server) {
   // Dynamic import so vite is never loaded in production bundle
@@ -35,7 +36,7 @@ export async function setupVite(app: Express, server: Server) {
 export function serveStatic(app: Express) {
   const distPath = path.resolve(__dirname, "public");
   if (!fs.existsSync(distPath)) {
-    console.error(`Could not find the build directory: ${distPath}, make sure to build the client first`);
+    logger.error("Could not find the build directory: %s, make sure to build the client first", distPath);
   }
   app.use(express.static(distPath));
   app.use("*", (_req, res) => {
