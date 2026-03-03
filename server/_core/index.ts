@@ -10,6 +10,7 @@ import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { logger } from "./logger";
+import { validateEnv, isProduction } from "./env";
 import { registerAuthRoutes } from "./oauth";
 import { apiLimiter, enrollmentLimiter, transferLimiter, a2aLimiter, tonAuthLimiter, escrowLimiter, taskCreationLimiter, youtubeLimiter } from "./rateLimit";
 import { registerTonAuthRoutes } from "../ton-auth-routes";
@@ -24,6 +25,7 @@ import { registerMetricsRoute, incrementRequests, incrementErrors } from "../met
 import { registerSSERoute } from "../sse";
 import { handleStripeWebhook } from "../stripe-webhooks";
 import { registerTelegramBotWebhook, setTelegramWebhook } from "../telegram-bot";
+import { createCSRFMiddleware } from "./csrf";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -45,6 +47,18 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  // Validate environment variables before starting server (P0 security fix)
+  try {
+    validateEnv();
+    logger.info("✅ Environment validation passed");
+  } catch (error) {
+    if (error instanceof Error) {
+      logger.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+
   const app = express();
   app.set("trust proxy", 1); // Trust first proxy (nginx) for correct client IP in rate limiter
   const server = createServer(app);
@@ -65,11 +79,20 @@ async function startServer() {
     },
     crossOriginEmbedderPolicy: false,
   }));
+
+  // CSRF protection for state-changing web endpoints (P0 security fix)
+  app.use(createCSRFMiddleware());
   // Stripe webhook needs raw body for signature verification — must be before json parser
-  app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), handleStripeWebhook);
-  // Configure body parser with reduced size limit (security hardening)
-  app.use(express.json({ limit: "10mb" }));
-  app.use(express.urlencoded({ limit: "10mb", extended: true }));
+  app.post("/api/stripe/webhook", express.raw({ type: "application/json", limit: "10kb" }), handleStripeWebhook);
+  // Configure body parser with reduced size limit (security hardening - P0 fix)
+  app.use(express.json({
+    limit: "1mb",  // Reduced from 10mb to prevent DoS attacks
+    strict: true,  // Reject invalid JSON
+  }));
+  app.use(express.urlencoded({
+    limit: "10kb",
+    extended: false,
+  }));
   // Request counting for metrics
   app.use((_req, res, next) => {
     incrementRequests();
