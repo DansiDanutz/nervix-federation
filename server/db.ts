@@ -17,6 +17,10 @@ import {
   InsertKnowledgeAudit,
   InsertBarterTransaction,
   InsertHeartbeatLog,
+  InsertStripeCustomer,
+  InsertStripeCheckoutSession,
+  InsertStripeSubscription,
+  InsertFiatTransaction,
 } from "../drizzle/schema";
 import { logger } from './_core/logger';
 import { ENV } from './_core/env';
@@ -1069,4 +1073,103 @@ export async function getYouTubeVideoStats(userId: number) {
     totalLikes: videos.reduce((s: number, v: any) => s + (v.like_count || 0), 0),
     totalComments: videos.reduce((s: number, v: any) => s + (v.comment_count || 0), 0),
   };
+}
+
+// ─── Stripe Customers ─────────────────────────────────────────────────────────
+
+export async function createStripeCustomer(customer: InsertStripeCustomer) {
+  return check(await getDb().from("stripe_customers").insert(customer).select().single());
+}
+
+export async function getStripeCustomerByUserId(userId: number) {
+  const { data } = await getDb().from("stripe_customers").select("*").eq("userId", userId).single();
+  return data;
+}
+
+export async function getStripeCustomerByStripeId(stripeCustomerId: string) {
+  const { data } = await getDb().from("stripe_customers").select("*").eq("stripeCustomerId", stripeCustomerId).single();
+  return data;
+}
+
+// ─── Stripe Checkout Sessions ─────────────────────────────────────────────────
+
+export async function createStripeCheckoutSession(session: InsertStripeCheckoutSession) {
+  return check(await getDb().from("stripe_checkout_sessions").insert(session).select().single());
+}
+
+export async function updateStripeCheckoutSession(sessionId: string, updates: Partial<InsertStripeCheckoutSession>) {
+  return check(await getDb().from("stripe_checkout_sessions").update({ ...updates, updatedAt: new Date() }).eq("sessionId", sessionId).select().single());
+}
+
+export async function getStripeCheckoutSession(sessionId: string) {
+  const { data } = await getDb().from("stripe_checkout_sessions").select("*").eq("sessionId", sessionId).single();
+  return data;
+}
+
+export async function listStripeCheckoutSessions(userId: number, limit = 20) {
+  const { data } = await getDb().from("stripe_checkout_sessions").select("*").eq("userId", userId).order("createdAt", { ascending: false }).limit(limit);
+  return data || [];
+}
+
+// ─── Stripe Subscriptions ─────────────────────────────────────────────────────
+
+export async function upsertStripeSubscription(sub: InsertStripeSubscription) {
+  return check(await getDb().from("stripe_subscriptions").upsert(sub, { onConflict: "stripeSubscriptionId" }).select().single());
+}
+
+export async function getStripeSubscription(stripeSubscriptionId: string) {
+  const { data } = await getDb().from("stripe_subscriptions").select("*").eq("stripeSubscriptionId", stripeSubscriptionId).single();
+  return data;
+}
+
+export async function getActiveSubscriptionForUser(userId: number) {
+  const { data } = await getDb().from("stripe_subscriptions").select("*").eq("userId", userId).eq("status", "active").order("createdAt", { ascending: false }).limit(1).single();
+  return data;
+}
+
+export async function updateStripeSubscriptionStatus(stripeSubscriptionId: string, status: string) {
+  await getDb().from("stripe_subscriptions").update({ status, updatedAt: new Date() }).eq("stripeSubscriptionId", stripeSubscriptionId);
+}
+
+export async function updateSubscriptionCreditsGranted(stripeSubscriptionId: string, credits: string) {
+  await getDb().from("stripe_subscriptions").update({ creditsGrantedThisPeriod: credits, updatedAt: new Date() }).eq("stripeSubscriptionId", stripeSubscriptionId);
+}
+
+// ─── Fiat Transactions ────────────────────────────────────────────────────────
+
+export async function createFiatTransaction(tx: InsertFiatTransaction) {
+  return check(await getDb().from("fiat_transactions").insert(tx).select().single());
+}
+
+export async function getFiatTransactionByPaymentIntent(paymentIntentId: string) {
+  const { data } = await getDb().from("fiat_transactions").select("*").eq("stripePaymentIntentId", paymentIntentId).eq("type", "credit_purchase").order("createdAt", { ascending: false }).limit(1).single();
+  return data;
+}
+
+export async function listFiatTransactions(userId: number, limit = 50) {
+  const { data } = await getDb().from("fiat_transactions").select("*").eq("userId", userId).order("createdAt", { ascending: false }).limit(limit);
+  return data || [];
+}
+
+// ─── Credit Helpers (for Stripe webhook use) ──────────────────────────────────
+
+export async function addCreditsToAgent(agentId: string, credits: string) {
+  const agent = await getAgentById(agentId);
+  if (!agent) throw new Error(`Agent ${agentId} not found`);
+  const newBalance = (parseFloat(agent.creditBalance) + parseFloat(credits)).toFixed(6);
+  await getDb().from("agents").update({ creditBalance: newBalance, updatedAt: new Date() }).eq("agentId", agentId);
+  return newBalance;
+}
+
+export async function deductCreditsFromAgent(agentId: string, credits: string) {
+  const agent = await getAgentById(agentId);
+  if (!agent) throw new Error(`Agent ${agentId} not found`);
+  const newBalance = (parseFloat(agent.creditBalance) - parseFloat(credits)).toFixed(6);
+  await getDb().from("agents").update({ creditBalance: newBalance, updatedAt: new Date() }).eq("agentId", agentId);
+  return newBalance;
+}
+
+export async function getFirstAgentIdForUser(userId: number): Promise<string | null> {
+  const { data } = await getDb().from("agents").select("agentId").eq("ownerUserId", userId).order("createdAt", { ascending: true }).limit(1).single();
+  return data?.agentId || null;
 }

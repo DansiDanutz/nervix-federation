@@ -8,8 +8,9 @@ import { z } from "zod";
 import { nanoid } from "nanoid";
 import * as db from "./db";
 import { seedDemoData } from "./seed-demo";
-import { FEE_CONFIG } from "../shared/nervix-types";
+import { FEE_CONFIG, CREDIT_PACKAGES, SUBSCRIPTION_TIERS, FIAT_FEE_CONFIG } from "../shared/nervix-types";
 import * as tonEscrow from "./ton-escrow";
+import * as stripe from "./stripe-integration";
 import * as clawHub from "./clawhub-publisher";
 import { broadcastEvent } from "./sse";
 import { alertLargeTransfer } from "./telegram-alerts";
@@ -2411,6 +2412,173 @@ export const appRouter = router({
           bumpType: input.bumpType,
         };
       }),
+  }),
+
+  // ─── Stripe / Fiat Payment Router ─────────────────────────────────────────
+  stripe: router({
+    /** Check if Stripe is configured */
+    status: publicProcedure.query(() => {
+      return {
+        configured: stripe.isStripeConfigured(),
+        packages: CREDIT_PACKAGES,
+        subscriptionTiers: SUBSCRIPTION_TIERS,
+        feeConfig: FIAT_FEE_CONFIG,
+      };
+    }),
+
+    /** Create or retrieve Stripe customer for the logged-in user */
+    ensureCustomer: protectedProcedure.mutation(async ({ ctx }) => {
+      if (!ctx.user.email) throw new Error("Email required for Stripe checkout");
+
+      const existing = await db.getStripeCustomerByUserId(ctx.user.id);
+      if (existing) return existing;
+
+      const customer = await stripe.createOrGetCustomer({
+        email: ctx.user.email,
+        name: ctx.user.name || undefined,
+        userId: ctx.user.id,
+      });
+
+      const record = await db.createStripeCustomer({
+        userId: ctx.user.id,
+        stripeCustomerId: customer.id,
+        email: ctx.user.email,
+        name: ctx.user.name,
+      });
+
+      return record;
+    }),
+
+    /** Create a Stripe Checkout session for buying credits */
+    createCreditCheckout: protectedProcedure
+      .input(z.object({
+        packageId: z.enum(["credits_100", "credits_500", "credits_1000", "credits_5000"]),
+        agentId: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        if (!ctx.user.email) throw new Error("Email required for Stripe checkout");
+
+        // Ensure Stripe customer exists
+        let stripeCustomer = await db.getStripeCustomerByUserId(ctx.user.id);
+        if (!stripeCustomer) {
+          const customer = await stripe.createOrGetCustomer({
+            email: ctx.user.email,
+            name: ctx.user.name || undefined,
+            userId: ctx.user.id,
+          });
+          stripeCustomer = await db.createStripeCustomer({
+            userId: ctx.user.id,
+            stripeCustomerId: customer.id,
+            email: ctx.user.email,
+            name: ctx.user.name,
+          });
+        }
+
+        const pkg = CREDIT_PACKAGES.find(p => p.id === input.packageId);
+        if (!pkg) throw new Error("Invalid package");
+
+        const baseUrl = `${ctx.req.protocol}://${ctx.req.get("host")}`;
+        const session = await stripe.createCreditCheckoutSession({
+          packageId: input.packageId,
+          customerId: stripeCustomer.stripeCustomerId,
+          userId: ctx.user.id,
+          agentId: input.agentId,
+          successUrl: `${baseUrl}/billing?status=success&session_id={CHECKOUT_SESSION_ID}`,
+          cancelUrl: `${baseUrl}/billing?status=cancelled`,
+        });
+
+        // Track in our DB
+        await db.createStripeCheckoutSession({
+          sessionId: session.id,
+          stripeCustomerId: stripeCustomer.stripeCustomerId,
+          userId: ctx.user.id,
+          agentId: input.agentId || null,
+          packageId: input.packageId,
+          creditsAmount: String(pkg.credits),
+          amountUsd: String(pkg.priceUsd),
+          status: "pending",
+        });
+
+        return { checkoutUrl: session.url, sessionId: session.id };
+      }),
+
+    /** Create a subscription checkout session */
+    createSubscriptionCheckout: protectedProcedure
+      .input(z.object({
+        tierId: z.enum(["pro", "enterprise"]),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        if (!ctx.user.email) throw new Error("Email required for subscription");
+
+        let stripeCustomer = await db.getStripeCustomerByUserId(ctx.user.id);
+        if (!stripeCustomer) {
+          const customer = await stripe.createOrGetCustomer({
+            email: ctx.user.email,
+            name: ctx.user.name || undefined,
+            userId: ctx.user.id,
+          });
+          stripeCustomer = await db.createStripeCustomer({
+            userId: ctx.user.id,
+            stripeCustomerId: customer.id,
+            email: ctx.user.email,
+            name: ctx.user.name,
+          });
+        }
+
+        // Check for existing active subscription
+        const existing = await db.getActiveSubscriptionForUser(ctx.user.id);
+        if (existing) throw new Error("Active subscription already exists. Cancel first.");
+
+        const baseUrl = `${ctx.req.protocol}://${ctx.req.get("host")}`;
+        const session = await stripe.createSubscriptionCheckout({
+          tierId: input.tierId,
+          customerId: stripeCustomer.stripeCustomerId,
+          userId: ctx.user.id,
+          successUrl: `${baseUrl}/billing?status=subscribed&session_id={CHECKOUT_SESSION_ID}`,
+          cancelUrl: `${baseUrl}/billing?status=cancelled`,
+        });
+
+        return { checkoutUrl: session.url, sessionId: session.id };
+      }),
+
+    /** Cancel current subscription at period end */
+    cancelSubscription: protectedProcedure.mutation(async ({ ctx }) => {
+      const sub = await db.getActiveSubscriptionForUser(ctx.user.id);
+      if (!sub) throw new Error("No active subscription");
+
+      await stripe.cancelSubscription(sub.stripeSubscriptionId);
+      await db.updateStripeSubscriptionStatus(sub.stripeSubscriptionId, "canceled");
+
+      await db.createAuditEntry({
+        eventId: `evt_${nanoid(16)}`,
+        eventType: "stripe.subscription_canceled",
+        actorId: String(ctx.user.id),
+        actorType: "admin",
+        action: `Subscription ${sub.stripeSubscriptionId} canceled by user`,
+      });
+
+      return { ok: true, canceledAt: new Date().toISOString() };
+    }),
+
+    /** Get current subscription status for user */
+    mySubscription: protectedProcedure.query(async ({ ctx }) => {
+      const sub = await db.getActiveSubscriptionForUser(ctx.user.id);
+      if (!sub) return { tier: "free", subscription: null };
+      const tier = SUBSCRIPTION_TIERS.find(t => t.id === sub.tierId);
+      return { tier: sub.tierId, subscription: sub, tierInfo: tier };
+    }),
+
+    /** Get purchase history */
+    purchaseHistory: protectedProcedure
+      .input(z.object({ limit: z.number().min(1).max(100).optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        return db.listFiatTransactions(ctx.user.id, input?.limit || 20);
+      }),
+
+    /** Get Stripe publishable key for frontend */
+    publishableKey: publicProcedure.query(() => {
+      return { key: process.env.VITE_STRIPE_PUBLISHABLE_KEY || "" };
+    }),
   }),
 
   escrow: router({

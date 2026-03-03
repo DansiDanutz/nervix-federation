@@ -136,3 +136,48 @@ export const FEE_SCHEDULE = {
 
 /** The internal agent ID used for the Nervix treasury */
 export const NERVIX_TREASURY_AGENT_ID = "agt_nervix_treasury";
+
+// ─── Stripe / Fiat Payment Configuration ────────────────────────────────
+/** Credit packages available for purchase via Stripe */
+export const CREDIT_PACKAGES = [
+  { id: "credits_100", credits: 100, priceUsd: 10, label: "100 Credits" },
+  { id: "credits_500", credits: 500, priceUsd: 45, label: "500 Credits (10% off)" },
+  { id: "credits_1000", credits: 1000, priceUsd: 80, label: "1,000 Credits (20% off)" },
+  { id: "credits_5000", credits: 5000, priceUsd: 350, label: "5,000 Credits (30% off)" },
+] as const;
+export type CreditPackageId = typeof CREDIT_PACKAGES[number]["id"];
+
+/** Subscription tiers for recurring billing */
+export const SUBSCRIPTION_TIERS = [
+  { id: "free", name: "Free", priceUsd: 0, creditsPerMonth: 100, feeDiscount: 0 },
+  { id: "pro", name: "Pro", priceUsd: 29, creditsPerMonth: 1000, feeDiscount: 0.40 },
+  { id: "enterprise", name: "Enterprise", priceUsd: 99, creditsPerMonth: 5000, feeDiscount: 0.60 },
+] as const;
+export type SubscriptionTierId = typeof SUBSCRIPTION_TIERS[number]["id"];
+
+/** Fiat fee config — on top of Stripe's processing fees (2.9% + 30c) */
+export const FIAT_FEE_CONFIG = {
+  /** Platform markup on fiat task payments (1% on top of Stripe fees) */
+  platformMarkupPercent: 1.0,
+  /** Stripe's standard processing fee */
+  stripeProcessingPercent: 2.9,
+  stripeFixedCentsUsd: 30,
+  /** Minimum checkout amount in USD */
+  minimumCheckoutUsd: 5,
+  /** Maximum single checkout in USD */
+  maximumCheckoutUsd: 10000,
+  /** USD to credit conversion rate */
+  usdPerCredit: 0.10,
+} as const;
+
+/** Stripe checkout session statuses tracked in our DB */
+export const STRIPE_SESSION_STATUSES = [
+  "pending", "completed", "expired", "refunded",
+] as const;
+export type StripeSessionStatus = typeof STRIPE_SESSION_STATUSES[number];
+
+/** Stripe subscription statuses */
+export const STRIPE_SUBSCRIPTION_STATUSES = [
+  "active", "past_due", "canceled", "unpaid", "trialing", "incomplete",
+] as const;
+export type StripeSubscriptionStatus = typeof STRIPE_SUBSCRIPTION_STATUSES[number];

@@ -36,6 +36,10 @@ export const severityEnum = pgEnum("severity", ["info", "warning", "error", "cri
 
 export const enrollmentStatusEnum = pgEnum("enrollment_status", ["pending", "verified", "expired", "failed"]);
 
+export const stripeSessionStatusEnum = pgEnum("stripe_session_status", ["pending", "completed", "expired", "refunded"]);
+
+export const stripeSubscriptionStatusEnum = pgEnum("stripe_subscription_status", ["active", "past_due", "canceled", "unpaid", "trialing", "incomplete"]);
+
 export const a2aMessageStatusEnum = pgEnum("a2a_message_status", ["queued", "delivered", "failed", "expired"]);
 
 export const settlementStatusEnum = pgEnum("settlement_status", ["pending", "submitted", "confirmed", "failed"]);
@@ -448,3 +452,77 @@ export const heartbeatLogs = pgTable("heartbeat_logs", {
 });
 export type HeartbeatLog = typeof heartbeatLogs.$inferSelect;
 export type InsertHeartbeatLog = typeof heartbeatLogs.$inferInsert;
+
+// ─── Stripe Customers Table ────────────────────────────────────────────────
+export const stripeCustomers = pgTable("stripe_customers", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull(),
+  stripeCustomerId: varchar("stripeCustomerId", { length: 128 }).notNull().unique(),
+  email: varchar("email", { length: 320 }),
+  name: text("name"),
+  defaultPaymentMethod: varchar("defaultPaymentMethod", { length: 128 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+
+export type StripeCustomer = typeof stripeCustomers.$inferSelect;
+export type InsertStripeCustomer = typeof stripeCustomers.$inferInsert;
+
+// ─── Stripe Checkout Sessions Table ────────────────────────────────────────
+export const stripeCheckoutSessions = pgTable("stripe_checkout_sessions", {
+  id: serial("id").primaryKey(),
+  sessionId: varchar("sessionId", { length: 128 }).notNull().unique(),
+  stripeCustomerId: varchar("stripeCustomerId", { length: 128 }),
+  userId: integer("userId"),
+  agentId: varchar("agentId", { length: 64 }),
+  packageId: varchar("packageId", { length: 64 }).notNull(),
+  creditsAmount: numeric("creditsAmount", { precision: 18, scale: 6 }).notNull(),
+  amountUsd: numeric("amountUsd", { precision: 10, scale: 2 }).notNull(),
+  status: stripeSessionStatusEnum("status").default("pending").notNull(),
+  stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 128 }),
+  completedAt: timestamp("completedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+
+export type StripeCheckoutSession = typeof stripeCheckoutSessions.$inferSelect;
+export type InsertStripeCheckoutSession = typeof stripeCheckoutSessions.$inferInsert;
+
+// ─── Stripe Subscriptions Table ────────────────────────────────────────────
+export const stripeSubscriptions = pgTable("stripe_subscriptions", {
+  id: serial("id").primaryKey(),
+  stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 128 }).notNull().unique(),
+  stripeCustomerId: varchar("stripeCustomerId", { length: 128 }).notNull(),
+  userId: integer("userId").notNull(),
+  tierId: varchar("tierId", { length: 32 }).notNull(),
+  status: stripeSubscriptionStatusEnum("status").default("active").notNull(),
+  currentPeriodStart: timestamp("currentPeriodStart"),
+  currentPeriodEnd: timestamp("currentPeriodEnd"),
+  cancelAtPeriodEnd: boolean("cancelAtPeriodEnd").default(false).notNull(),
+  creditsGrantedThisPeriod: numeric("creditsGrantedThisPeriod", { precision: 18, scale: 6 }).default("0.000000").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+
+export type StripeSubscription = typeof stripeSubscriptions.$inferSelect;
+export type InsertStripeSubscription = typeof stripeSubscriptions.$inferInsert;
+
+// ─── Fiat Transactions Table (mirrors economicTransactions for fiat) ────────
+export const fiatTransactions = pgTable("fiat_transactions", {
+  id: serial("id").primaryKey(),
+  transactionId: varchar("transactionId", { length: 64 }).notNull().unique(),
+  type: varchar("type", { length: 64 }).notNull(), // "credit_purchase", "subscription_payment", "refund"
+  userId: integer("userId").notNull(),
+  agentId: varchar("agentId", { length: 64 }),
+  amountUsd: numeric("amountUsd", { precision: 10, scale: 2 }).notNull(),
+  creditsAmount: numeric("creditsAmount", { precision: 18, scale: 6 }).notNull(),
+  stripeFee: numeric("stripeFee", { precision: 10, scale: 2 }),
+  platformFee: numeric("platformFee", { precision: 10, scale: 2 }),
+  stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 128 }),
+  stripeSessionId: varchar("stripeSessionId", { length: 128 }),
+  memo: text("memo"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type FiatTransaction = typeof fiatTransactions.$inferSelect;
+export type InsertFiatTransaction = typeof fiatTransactions.$inferInsert;

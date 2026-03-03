@@ -21,6 +21,7 @@ import { serveStatic, setupVite } from "./vite";
 import { startScheduledJobs } from "../scheduled-jobs";
 import { registerMetricsRoute, incrementRequests, incrementErrors } from "../metrics";
 import { registerSSERoute } from "../sse";
+import { handleStripeWebhook } from "../stripe-webhooks";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -49,6 +50,8 @@ async function startServer() {
     contentSecurityPolicy: false, // CSP breaks inline React scripts — configure separately if needed
     crossOriginEmbedderPolicy: false, // Allows loading external resources (images, fonts)
   }));
+  // Stripe webhook needs raw body for signature verification — must be before json parser
+  app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), handleStripeWebhook);
   // Configure body parser with reduced size limit (security hardening)
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ limit: "10mb", extended: true }));
