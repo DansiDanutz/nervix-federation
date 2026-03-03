@@ -32,12 +32,7 @@ async function verifyPassword(password: string, storedHash: string): Promise<{ v
   return { valid: legacyHash === storedHash, needsRehash: true };
 }
 
-// In-memory reset token store (fine for MVP — use DB/Redis in v3)
-const resetTokens = new Map<string, { email: string; expires: number }>();
-
-// Email verification token store
-const verifyTokens = new Map<string, { email: string; openId: string; expires: number }>();
-const resendLimiter = new Map<string, number>(); // email -> last resend timestamp
+// Auth tokens persisted in Supabase auth_tokens table (migrated from in-memory Maps)
 
 export function registerAuthRoutes(app: Express) {
 
@@ -59,7 +54,7 @@ export function registerAuthRoutes(app: Express) {
       sendWelcomeEmail(email, name).catch(() => {});
       // Send email verification
       const vToken = "vt_" + nanoid(32);
-      verifyTokens.set(vToken, { email, openId, expires: Date.now() + 24 * 60 * 60 * 1000 });
+      await db.saveAuthToken(vToken, "verify", email, openId, new Date(Date.now() + 24 * 60 * 60 * 1000));
       sendVerificationEmail(email, vToken, name).catch(() => {});
       res.json({ success: true, openId });
     } catch (error) { logger.error({ err: error }, "Auth: Register failed"); res.status(500).json({ error: "Registration failed" }); }
@@ -101,7 +96,7 @@ export function registerAuthRoutes(app: Express) {
       // Always return success (don't reveal if email exists)
       if (user) {
         const token = nanoid(48);
-        resetTokens.set(token, { email, expires: Date.now() + 60 * 60 * 1000 }); // 1 hour
+        await db.saveAuthToken(token, "reset", email, null, new Date(Date.now() + 60 * 60 * 1000)); // 1 hour
         await sendPasswordResetEmail(email, token, user.name).catch(err => {
           logger.error({ err }, "Auth: Failed to send reset email");
         });
@@ -115,9 +110,8 @@ export function registerAuthRoutes(app: Express) {
     const { token, password } = req.body;
     if (!token || !password) { res.status(400).json({ error: "Token and password required" }); return; }
     if (password.length < 8) { res.status(400).json({ error: "Password must be at least 8 characters" }); return; }
-    const entry = resetTokens.get(token);
-    if (!entry || Date.now() > entry.expires) {
-      resetTokens.delete(token);
+    const entry = await db.getAuthToken(token);
+    if (!entry) {
       res.status(400).json({ error: "Reset link is invalid or expired. Please request a new one." });
       return;
     }
@@ -126,7 +120,7 @@ export function registerAuthRoutes(app: Express) {
       if (!user) { res.status(400).json({ error: "User not found" }); return; }
       const passwordHash = await hashPassword(password);
       await db.upsertUser({ ...user, passwordHash } as any);
-      resetTokens.delete(token);
+      await db.markTokenUsed(token);
       // Auto-login after reset
       const sessionToken = await createSessionToken(user.openId, { name: user.name || "" });
       res.cookie(COOKIE_NAME, sessionToken, { ...getSessionCookieOptions(req), maxAge: ONE_YEAR_MS });
@@ -138,15 +132,14 @@ export function registerAuthRoutes(app: Express) {
   app.get("/api/auth/verify-email", async (req: Request, res: Response) => {
     const token = req.query.token as string;
     if (!token) { res.redirect("/dashboard?verified=error"); return; }
-    const entry = verifyTokens.get(token);
-    if (!entry || Date.now() > entry.expires) {
-      verifyTokens.delete(token);
+    const entry = await db.getAuthToken(token);
+    if (!entry) {
       res.redirect("/verify-email?error=expired");
       return;
     }
     try {
-      await (db.getDb() as any).from("users").update({ emailVerified: true }).eq("openId", entry.openId);
-      verifyTokens.delete(token);
+      await (db.getDb() as any).from("users").update({ emailVerified: true }).eq("openId", entry.open_id);
+      await db.markTokenUsed(token);
       res.redirect("/verify-email?success=1");
     } catch(err) {
       logger.error({ err }, "Auth: Email verify failed");
@@ -158,16 +151,14 @@ export function registerAuthRoutes(app: Express) {
     const cookie = req.cookies?.[process.env.COOKIE_NAME || "NERVIX_SESSION"] || req.headers["authorization"]?.replace("Bearer ", "");
     const { email } = req.body;
     if (!email) { res.status(400).json({ error: "Email required" }); return; }
-    const now = Date.now();
-    const lastSent = resendLimiter.get(email) || 0;
-    if (now - lastSent < 60 * 1000) { res.status(429).json({ error: "Please wait 1 minute before resending" }); return; }
     try {
+      const recentlySent = await db.hasRecentToken(email, "verify", 60_000);
+      if (recentlySent) { res.status(429).json({ error: "Please wait 1 minute before resending" }); return; }
       const user = await db.getUserByEmail(email) as any;
       if (!user) { res.json({ success: true }); return; } // don't reveal
       if (user.emailVerified) { res.json({ success: true, alreadyVerified: true }); return; }
-      const token = "vt_" + require("nanoid").nanoid(32);
-      verifyTokens.set(token, { email, openId: user.openId, expires: Date.now() + 24 * 60 * 60 * 1000 });
-      resendLimiter.set(email, now);
+      const token = "vt_" + nanoid(32);
+      await db.saveAuthToken(token, "verify", email, user.openId, new Date(Date.now() + 24 * 60 * 60 * 1000));
       await sendVerificationEmail(email, token, user.name).catch((err) => logger.error({ err }, "Auth: Failed to send verification email"));
       res.json({ success: true });
     } catch(err) {

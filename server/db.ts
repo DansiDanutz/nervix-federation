@@ -1199,6 +1199,7 @@ export async function getFirstAgentIdForUser(userId: number): Promise<string | n
   return data?.agentId || null;
 }
 
+<<<<<<< HEAD
 // ─── Brain Layer (Agent Thoughts) ────────────────────────────────────────────
 
 export async function createThought(thought: InsertAgentThought) {
@@ -1305,4 +1306,38 @@ export async function updateThoughtEmbedding(id: string, embedding: number[]) {
       throw new Error("Failed to update thought embedding");
     }
   }
+=======
+// ─── Auth Tokens (password reset + email verification) ──────────────────────
+
+export async function saveAuthToken(token: string, type: "reset" | "verify", email: string, openId: string | null, expiresAt: Date) {
+  check(await getDb().from("auth_tokens").insert({
+    token, type, email, open_id: openId, expires_at: expiresAt.toISOString(),
+  }));
+}
+
+export async function getAuthToken(token: string) {
+  const { data } = await getDb().from("auth_tokens").select("*")
+    .eq("token", token)
+    .is("used_at", null)
+    .gt("expires_at", new Date().toISOString())
+    .limit(1);
+  return data && data.length > 0 ? data[0] : null;
+}
+
+export async function markTokenUsed(token: string) {
+  check(await getDb().from("auth_tokens").update({ used_at: new Date().toISOString() }).eq("token", token));
+}
+
+export async function cleanupExpiredAuthTokens() {
+  await getDb().from("auth_tokens").delete().lt("expires_at", new Date().toISOString());
+}
+
+export async function hasRecentToken(email: string, type: "reset" | "verify", withinMs: number = 120_000) {
+  const since = new Date(Date.now() - withinMs).toISOString();
+  const { data } = await getDb().from("auth_tokens").select("id")
+    .eq("email", email).eq("type", type)
+    .gt("created_at", since)
+    .limit(1);
+  return data != null && data.length > 0;
+>>>>>>> 997b3d6 (fix: migrate auth tokens to DB + enable CSP)
 }

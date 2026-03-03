@@ -50,8 +50,20 @@ async function startServer() {
   const server = createServer(app);
   // Security headers
   app.use(helmet({
-    contentSecurityPolicy: false, // CSP breaks inline React scripts — configure separately if needed
-    crossOriginEmbedderPolicy: false, // Allows loading external resources (images, fonts)
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "https://js.stripe.com"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        imgSrc: ["'self'", "data:", "https:", "blob:"],
+        connectSrc: ["'self'", "https://nervix.ai", "wss://nervix.ai", "https://*.sentry.io", "https://api.stripe.com"],
+        frameSrc: ["https://js.stripe.com"],
+        objectSrc: ["'none'"],
+        upgradeInsecureRequests: [],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
   }));
   // Stripe webhook needs raw body for signature verification — must be before json parser
   app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), handleStripeWebhook);
