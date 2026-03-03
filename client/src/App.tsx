@@ -30,6 +30,7 @@ import AgentManage from "./pages/AgentManage";
 import BulkOnboard from "./pages/BulkOnboard";
 import ChallengeVerify from "./pages/ChallengeVerify";
 import DeveloperPortal from "./pages/DeveloperPortal";
+import AgentHub from "./pages/AgentHub";
 
 function Router() {
   return (
@@ -55,6 +56,7 @@ function Router() {
       <Route path={"/onboard"} component={OnboardAgent} />
       <Route path={"/brain"} component={BrainDashboard} />
       <Route path={"/developers"} component={DeveloperPortal} />
+      <Route path={"/hub"} component={AgentHub} />
       <Route path={"/admin"} component={Admin} />
       <Route path={"/bulk-onboard"} component={BulkOnboard} />
       <Route path={"/verify"} component={ChallengeVerify} />
