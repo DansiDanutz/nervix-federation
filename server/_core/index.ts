@@ -23,6 +23,7 @@ import { startScheduledJobs } from "../scheduled-jobs";
 import { registerMetricsRoute, incrementRequests, incrementErrors } from "../metrics";
 import { registerSSERoute } from "../sse";
 import { handleStripeWebhook } from "../stripe-webhooks";
+import { registerTelegramBotWebhook, setTelegramWebhook } from "../telegram-bot";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -79,6 +80,8 @@ async function startServer() {
   registerTonAuthRoutes(app);
   // Telegram Login Widget routes
   registerTelegramAuthRoutes(app);
+  // Telegram bot webhook (inbound commands from Dan)
+  registerTelegramBotWebhook(app);
   // YouTube multi-tenant routes
   registerYouTubeRoutes(app);
   app.use("/api", mcpA2aRouter); // MCP + A2A protocol compliance
@@ -111,6 +114,9 @@ async function startServer() {
 
   // Start all scheduled background jobs (heartbeat monitor, webhook retry, cleanup, etc.)
   startScheduledJobs();
+  // Register Telegram bot webhook URL with Telegram (no-op if BOT_TOKEN not set)
+  const publicUrl = process.env.PUBLIC_URL || `https://nervix.ai`;
+  setTelegramWebhook(publicUrl).catch(() => {});
 
   // Sentry error handler (must be after all routes)
   if (process.env.SENTRY_DSN) { app.use(Sentry.expressErrorHandler()); }
