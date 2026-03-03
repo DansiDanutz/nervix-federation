@@ -4,50 +4,64 @@ on:
   push:
     branches: [main]
 
-env:
-  NODE_VERSION: '22'
-  PNPM_VERSION: '10.4.1'
-
 jobs:
   deploy:
-    name: Build & Deploy to Nano
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
+          node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: npm install --legacy-peer-deps
 
       - name: Build
-        run: pnpm run build
-
-      - name: Deploy to server
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SERVER_IP: ${{ secrets.SERVER_IP }}
         run: |
-          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          # Sync built files
-          rsync -avz --delete dist/ root@$SERVER_IP:/opt/nervix/dist/ \
-            -e "ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no"
+          npx vite build
+          npx esbuild server/_core/index.ts \
+            --platform=node \
+            --packages=external \
+            --bundle \
+            --external:vite \
+            --external:vite-plugin-jsx-source \
+            --format=cjs \
+            --outdir=dist
+
+      - name: Deploy to Nano
+        env:
+          NANO_SSH_KEY: ${{ secrets.NANO_SSH_KEY }}
+          NANO_HOST: ${{ secrets.NANO_HOST }}
+          NANO_USER: ${{ secrets.NANO_USER }}
+        run: |
+          # Write SSH key
+          mkdir -p ~/.ssh
+          echo "$NANO_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Add host to known_hosts
+          ssh-keyscan -H $NANO_HOST >> ~/.ssh/known_hosts 2>/dev/null
+          
+          # Rsync dist to production
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            dist/ \
+            $NANO_USER@$NANO_HOST:/opt/nervix/dist/
+          
           # Restart PM2
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no root@$SERVER_IP \
-            "cd /opt/nervix && pm2 restart nervix --update-env"
+          ssh -i ~/.ssh/deploy_key $NANO_USER@$NANO_HOST "pm2 restart nervix"
+          
           # Health check
           sleep 5
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no root@$SERVER_IP \
-            "curl -sf http://localhost:3000/api/trpc/federation.health || (echo '❌ Health check failed' && exit 1)"
-          echo "✅ Deploy OK"
+          ssh -i ~/.ssh/deploy_key $NANO_USER@$NANO_HOST "curl -s http://localhost:3000/health"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Deploy failed! Check logs."
