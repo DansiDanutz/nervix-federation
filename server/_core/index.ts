@@ -5,9 +5,11 @@ if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN, environment: process.env.NODE_ENV || "production", tracesSampleRate: 0.05 });
 }
 import express from "express";
+import helmet from "helmet";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { logger } from "./logger";
 import { registerAuthRoutes } from "./oauth";
 import { apiLimiter, enrollmentLimiter, transferLimiter, a2aLimiter } from "./rateLimit";
 import { registerTonAuthRoutes } from "../ton-auth-routes";
@@ -19,14 +21,6 @@ import { serveStatic, setupVite } from "./vite";
 import { startScheduledJobs } from "../scheduled-jobs";
 import { registerMetricsRoute, incrementRequests, incrementErrors } from "../metrics";
 import { registerSSERoute } from "../sse";
-import {
-  securityHeaders,
-  corsConfig,
-  enforceHTTPS,
-  sanitizeInput,
-  detectSuspiciousActivity,
-  logSecurityEvent,
-} from "./securityMiddleware";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -50,86 +44,43 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-
-  // ─── SECURITY MIDDLEWARE (Applied first, in correct order) ───────────────
-  // 1. HTTPS enforcement (production only)
-  if (process.env.NODE_ENV === "production") {
-    app.use(enforceHTTPS);
-    logSecurityEvent("https_enforcement_enabled", {
-      message: "HTTPS enforcement active in production",
-    });
-  }
-
-  // 2. Helmet security headers (X-XSS-Protection, HSTS, CSP, etc.)
-  app.use(securityHeaders);
-  logSecurityEvent("security_headers_enabled", {
-    message: "Helmet security headers configured",
-  });
-
-  // 3. CORS configuration with strict origin whitelist
-  app.use(corsConfig);
-  logSecurityEvent("cors_configured", {
-    message: "CORS middleware active",
-    mode: process.env.NODE_ENV || "development",
-  });
-
-  // 4. Suspicious activity detection (pattern matching)
-  app.use(detectSuspiciousActivity);
-
-  // ─── BODY PARSING & INPUT SANITIZATION ──────────────────────────────────
+  // Security headers
+  app.use(helmet({
+    contentSecurityPolicy: false, // CSP breaks inline React scripts — configure separately if needed
+    crossOriginEmbedderPolicy: false, // Allows loading external resources (images, fonts)
+  }));
   // Configure body parser with reduced size limit (security hardening)
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ limit: "10mb", extended: true }));
-
-  // 5. Input sanitization (remove dangerous patterns)
-  app.use(sanitizeInput);
-  logSecurityEvent("input_sanitization_enabled", {
-    message: "Input sanitization middleware active",
-  });
-
-  // ─── REQUEST METRICS ─────────────────────────────────────────────────────
   // Request counting for metrics
   app.use((_req, res, next) => {
     incrementRequests();
     res.on("finish", () => { if (res.statusCode >= 500) incrementErrors(); });
     next();
   });
-
-  // ─── ENDPOINTS (No rate limiting needed) ────────────────────────────────
   // Prometheus metrics endpoint (no rate limit)
   registerMetricsRoute(app);
-
   // SSE endpoint for live dashboard updates
   registerSSERoute(app);
-
   // Health check endpoint for Docker HEALTHCHECK (no rate limit)
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString(), uptime: process.uptime() });
   });
-
-  // ─── RATE LIMITING ───────────────────────────────────────────────────────
   // Global API rate limiter
   app.use("/api", apiLimiter);
-
-  // Route-specific rate limiters for sensitive endpoints
+  // Auth routes (register + login)
+  registerAuthRoutes(app);
+  // TON wallet authentication routes
+  registerTonAuthRoutes(app);
+  // Telegram Login Widget routes
+  registerTelegramAuthRoutes(app);
+  // YouTube multi-tenant routes
+  registerYouTubeRoutes(app);
+  // Route-specific rate limiters for sensitive tRPC endpoints
   app.use("/api/trpc/enrollment", enrollmentLimiter);
   app.use("/api/trpc/economy.transfer", transferLimiter);
   app.use("/api/trpc/a2a.send", a2aLimiter);
-
-  // ─── API ROUTES ───────────────────────────────────────────────────────────
-  // Auth routes (register + login)
-  registerAuthRoutes(app);
-
-  // TON wallet authentication routes
-  registerTonAuthRoutes(app);
-
-  // Telegram Login Widget routes
-  registerTelegramAuthRoutes(app);
-
-  // YouTube multi-tenant routes
-  registerYouTubeRoutes(app);
-
-  // ─── tRPC API ────────────────────────────────────────────────────────────
+  // tRPC API
   app.use(
     "/api/trpc",
     createExpressMiddleware({
@@ -138,7 +89,6 @@ async function startServer() {
     })
   );
 
-  // ─── STATIC FILES / VITE ───────────────────────────────────────────────
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
@@ -146,12 +96,11 @@ async function startServer() {
     serveStatic(app);
   }
 
-  // ─── SERVER STARTUP ─────────────────────────────────────────────────────
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
+    logger.info("Port %d is busy, using port %d instead", preferredPort, port);
   }
 
   // Start all scheduled background jobs (heartbeat monitor, webhook retry, cleanup, etc.)
@@ -161,20 +110,8 @@ async function startServer() {
   if (process.env.SENTRY_DSN) { app.use(Sentry.expressErrorHandler()); }
 
   server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
-    logSecurityEvent("server_started", {
-      port,
-      environment: process.env.NODE_ENV || "development",
-      message: "NERVIX Federation API started successfully",
-    });
+    logger.info("Server running on http://localhost:%d/", port);
   });
 }
 
-startServer().catch((error) => {
-  console.error("Failed to start server:", error);
-  logSecurityEvent("server_start_failed", {
-    error: error.message,
-    stack: error.stack,
-  });
-  process.exit(1);
-});
+startServer().catch((err) => logger.error({ err }, "Failed to start server"));

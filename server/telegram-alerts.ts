@@ -3,6 +3,8 @@
  * Sends critical alerts to Dan via @NervixAlert_bot.
  */
 
+import { logger } from "./_core/logger";
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_ALERT_CHAT_ID || "424184493";
 
@@ -21,7 +23,7 @@ async function sendTelegram(text: string) {
       signal: AbortSignal.timeout(10_000),
     });
   } catch (err: any) {
-    console.warn(`[TelegramAlert] Failed to send: ${err.message}`);
+    logger.warn("TelegramAlert: Failed to send: %s", err.message);
   }
 }
 

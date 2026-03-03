@@ -9,6 +9,7 @@
  * 5. Session cleanup — delete expired sessions (every 1 hour)
  */
 import crypto from "crypto";
+import { logger } from "./_core/logger";
 import { getDb, getAgentById } from "./db";
 import { alertAgentsOffline, alertTaskTimeout, alertWebhookDead } from "./telegram-alerts";
 import { deliverWebhook } from "./webhook-delivery";
@@ -17,7 +18,7 @@ const MAX_WEBHOOK_RETRIES = 3;
 const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
 
 function log(job: string, msg: string) {
-  console.log(`[ScheduledJob:${job}] ${msg}`);
+  logger.info("ScheduledJob:%s %s", job, msg);
 }
 
 // ─── Job 1: Expire old enrollment challenges ────────────────────────────────

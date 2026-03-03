@@ -10,6 +10,7 @@ import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import type { Express, Request, Response } from "express";
 import { nanoid } from "nanoid";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { logger } from "./_core/logger";
 import { createSessionToken, authenticateRequest } from "./_core/sdk";
 import * as db from "./db";
 import { generatePayload, verifyNonce, verifyTonProof, type TonProofPayload } from "./ton-proof";
@@ -43,7 +44,7 @@ export function registerTonAuthRoutes(app: Express) {
       const payload = await generatePayload();
       res.json({ payload });
     } catch (error) {
-      console.error("[TonAuth] Failed to generate payload:", error);
+      logger.error({ err: error }, "TonAuth: failed to generate payload");
       res.status(500).json({ error: "Failed to generate payload" });
     }
   });
@@ -80,7 +81,7 @@ export function registerTonAuthRoutes(app: Express) {
       const result = await verifyTonProof(body, allowedDomains);
 
       if (!result.valid) {
-        console.warn("[TonAuth] Proof verification failed:", result.error);
+        logger.warn("TonAuth: proof verification failed: %s", result.error);
         res.status(401).json({ error: result.error || "Invalid proof" });
         return;
       }
@@ -125,7 +126,7 @@ export function registerTonAuthRoutes(app: Express) {
       try {
         linkedAgentIds = await db.propagateWalletToOwnedAgents(user.id, walletAddress);
         if (linkedAgentIds.length > 0) {
-          console.log(`[TonAuth] Auto-linked wallet to ${linkedAgentIds.length} agent(s): ${linkedAgentIds.join(", ")}`);
+          logger.info("TonAuth: auto-linked wallet to %d agent(s): %s", linkedAgentIds.length, linkedAgentIds.join(", "));
           await db.createAuditEntry({
             eventId: `evt_${nanoid(16)}`,
             eventType: "wallet.auto_linked_agents",
@@ -136,7 +137,7 @@ export function registerTonAuthRoutes(app: Express) {
           });
         }
       } catch (err) {
-        console.warn("[TonAuth] Failed to auto-link wallet to agents:", err);
+        logger.warn({ err }, "TonAuth: failed to auto-link wallet to agents");
       }
 
       // 5. Create session cookie
@@ -159,7 +160,7 @@ export function registerTonAuthRoutes(app: Express) {
         linkedAgents: linkedAgentIds,
       });
     } catch (error) {
-      console.error("[TonAuth] Verification failed:", error);
+      logger.error({ err: error }, "TonAuth: verification failed");
       res.status(500).json({ error: "Verification failed" });
     }
   });

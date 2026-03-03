@@ -16,6 +16,27 @@ export interface WebhookPayload {
   retryAttempt?: number;
 }
 
+/** Block SSRF: reject private/reserved IPs and non-http(s) schemes */
+function isUrlSafe(urlStr: string): boolean {
+  try {
+    const url = new URL(urlStr);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+    const host = url.hostname;
+    // Block private/reserved ranges
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") return false;
+    if (host.startsWith("10.")) return false;
+    if (host.startsWith("192.168.")) return false;
+    if (host.startsWith("169.254.")) return false;
+    if (host.startsWith("0.")) return false;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
+    // Block metadata endpoints (cloud providers)
+    if (host === "metadata.google.internal") return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Attempt to deliver a webhook message to an agent.
  * Updates the a2a_message status to "delivered" or "failed".
@@ -28,10 +49,17 @@ export async function deliverWebhook(
 ): Promise<boolean> {
   const agent = await db.getAgentById(toAgentId);
   if (!agent?.webhookUrl) {
-    // No webhook URL — mark as failed so it doesn't retry forever
     await db.updateA2AMessage(messageId, {
       status: "failed",
       errorMessage: "Agent has no webhook URL configured",
+    });
+    return false;
+  }
+
+  if (!isUrlSafe(agent.webhookUrl)) {
+    await db.updateA2AMessage(messageId, {
+      status: "failed",
+      errorMessage: "Webhook URL blocked: private/reserved address",
     });
     return false;
   }
