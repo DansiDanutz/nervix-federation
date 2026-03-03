@@ -11,7 +11,7 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { logger } from "./logger";
 import { registerAuthRoutes } from "./oauth";
-import { apiLimiter, enrollmentLimiter, transferLimiter, a2aLimiter } from "./rateLimit";
+import { apiLimiter, enrollmentLimiter, transferLimiter, a2aLimiter, tonAuthLimiter, escrowLimiter, taskCreationLimiter, youtubeLimiter } from "./rateLimit";
 import { registerTonAuthRoutes } from "../ton-auth-routes";
 import { registerTelegramAuthRoutes } from "./telegram-auth";
 import { registerYouTubeRoutes } from "../youtube-routes";
@@ -88,19 +88,25 @@ async function startServer() {
   app.use("/api", apiLimiter);
   // Auth routes (register + login)
   registerAuthRoutes(app);
+  // TON wallet authentication routes (with rate limiting)
+  app.use("/api/ton-auth", tonAuthLimiter);
+  registerTonAuthRoutes(app);
   // TON wallet authentication routes
   registerTonAuthRoutes(app);
   // Telegram Login Widget routes
   registerTelegramAuthRoutes(app);
   // Telegram bot webhook (inbound commands from Dan)
   registerTelegramBotWebhook(app);
-  // YouTube multi-tenant routes
+  // YouTube multi-tenant routes (with rate limiting)
+  app.use("/api/youtube", youtubeLimiter);
   registerYouTubeRoutes(app);
   app.use("/api", mcpA2aRouter); // MCP + A2A protocol compliance
   // Route-specific rate limiters for sensitive tRPC endpoints
   app.use("/api/trpc/enrollment", enrollmentLimiter);
   app.use("/api/trpc/economy.transfer", transferLimiter);
   app.use("/api/trpc/a2a.send", a2aLimiter);
+  app.use("/api/trpc/escrow", escrowLimiter);
+  app.use("/api/trpc/tasks.create", taskCreationLimiter);
   // tRPC API
   app.use(
     "/api/trpc",

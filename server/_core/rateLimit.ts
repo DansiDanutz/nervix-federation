@@ -54,3 +54,39 @@ export const a2aLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// TON Wallet Auth: 10 per 15 min per IP (prevent brute force attacks)
+export const tonAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: "Too many TON auth attempts. Try again in 15 minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Escrow operations: 5 per minute per IP (financial operations)
+export const escrowLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: "Too many escrow operations. Slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Task creation: 10 per minute per IP (prevent spam)
+export const taskCreationLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: "Too many task creations. Slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// YouTube operations: 20 per minute per IP (API cost control)
+export const youtubeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  message: { error: "Too many YouTube API requests. Slow down." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
