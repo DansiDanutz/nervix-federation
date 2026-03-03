@@ -23,7 +23,7 @@ function isUrlSafe(urlStr: string): boolean {
     if (url.protocol !== "https:" && url.protocol !== "http:") return false;
     const host = url.hostname;
     // Block private/reserved ranges
-    if (host === "localhost" || host === "127.0.0.1" || host === "::1") return false;
+    if (host === "localhost" || host.startsWith("127.") || host === "::1") return false;
     if (host.startsWith("10.")) return false;
     if (host.startsWith("192.168.")) return false;
     if (host.startsWith("169.254.")) return false;

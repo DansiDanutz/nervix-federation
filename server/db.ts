@@ -53,6 +53,24 @@ function escapeLike(str: string): string {
   return str.replace(/[%_\\]/g, "\\$&");
 }
 
+/** Retry a Supabase query once after 500ms on 503/504 or timeout */
+async function withRetry<R extends { data: any; error: any }>(fn: () => PromiseLike<R>): Promise<R> {
+  let result: R;
+  try {
+    result = await fn();
+  } catch {
+    // Timeout or network error — retry once
+    await new Promise(r => setTimeout(r, 500));
+    return fn();
+  }
+  const s = result.error?.status;
+  if (s === 503 || s === 504) {
+    await new Promise(r => setTimeout(r, 500));
+    try { return await fn(); } catch { return result; }
+  }
+  return result;
+}
+
 // ─── Users ──────────────────────────────────────────────────────────────────
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) throw new Error("User openId is required for upsert");
@@ -116,14 +134,15 @@ export async function listAgents(filters?: {
 }) {
   const limit = filters?.limit || 50;
   const offset = filters?.offset || 0;
-  let query = getDb().from("agents").select("*", { count: "exact" });
-  if (filters?.status) query = query.eq("status", filters.status);
-  if (filters?.search) {
-    const s = escapeLike(filters.search);
-    query = query.or(`name.ilike.%${s}%,description.ilike.%${s}%`);
-  }
-  query = (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1);
-  const { data, count, error } = await query;
+  const { data, count, error } = await withRetry(() => {
+    let query = getDb().from("agents").select("*", { count: "exact" });
+    if (filters?.status) query = query.eq("status", filters.status);
+    if (filters?.search) {
+      const s = escapeLike(filters.search);
+      query = query.or(`name.ilike.%${s}%,description.ilike.%${s}%`);
+    }
+    return (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1).abortSignal(AbortSignal.timeout(8_000));
+  });
   if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   let result = data || [];
   if (filters?.role) {
@@ -243,13 +262,14 @@ export async function listTasks(filters?: {
 }) {
   const limit = filters?.limit || 50;
   const offset = filters?.offset || 0;
-  let query = getDb().from("tasks").select("*", { count: "estimated" });
-  if (filters?.status) query = query.eq("status", filters.status);
-  if (filters?.requesterId) query = query.eq("requesterId", filters.requesterId);
-  if (filters?.assigneeId) query = query.eq("assigneeId", filters.assigneeId);
-  if (filters?.priority) query = query.eq("priority", filters.priority);
-  query = (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1);
-  const { data, count, error } = await (query as any).abortSignal(AbortSignal.timeout(8_000));
+  const { data, count, error } = await withRetry(() => {
+    let query = getDb().from("tasks").select("*", { count: "estimated" });
+    if (filters?.status) query = query.eq("status", filters.status);
+    if (filters?.requesterId) query = query.eq("requesterId", filters.requesterId);
+    if (filters?.assigneeId) query = query.eq("assigneeId", filters.assigneeId);
+    if (filters?.priority) query = query.eq("priority", filters.priority);
+    return (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1).abortSignal(AbortSignal.timeout(8_000));
+  });
   if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   return { tasks: data || [], total: count || 0 };
 }
@@ -728,12 +748,12 @@ export async function updateBlockchainSettlement(settlementId: string, data: Par
 // ─── Federation Stats ────────────────────────────────────────────────────────
 export async function getFederationStats() {
   const [agentsRes, activeRes, tasksRes, completedRes, failedRes, activeTasksRes] = await Promise.all([
-    getDb().from("agents").select("*", { count: "exact", head: true }),
-    getDb().from("agents").select("*", { count: "exact", head: true }).eq("status", "active"),
-    getDb().from("tasks").select("*", { count: "exact", head: true }),
-    getDb().from("tasks").select("*", { count: "exact", head: true }).eq("status", "completed"),
-    getDb().from("tasks").select("*", { count: "exact", head: true }).eq("status", "failed"),
-    getDb().from("tasks").select("*", { count: "exact", head: true }).in("status", ["created", "assigned", "in_progress"]),
+    getDb().from("agents").select("*", { count: "exact", head: true }).abortSignal(AbortSignal.timeout(8_000)),
+    getDb().from("agents").select("*", { count: "exact", head: true }).eq("status", "active").abortSignal(AbortSignal.timeout(8_000)),
+    getDb().from("tasks").select("*", { count: "exact", head: true }).abortSignal(AbortSignal.timeout(8_000)),
+    getDb().from("tasks").select("*", { count: "exact", head: true }).eq("status", "completed").abortSignal(AbortSignal.timeout(8_000)),
+    getDb().from("tasks").select("*", { count: "exact", head: true }).eq("status", "failed").abortSignal(AbortSignal.timeout(8_000)),
+    getDb().from("tasks").select("*", { count: "exact", head: true }).in("status", ["created", "assigned", "in_progress"]).abortSignal(AbortSignal.timeout(8_000)),
   ]);
   return {
     totalAgents: agentsRes.count || 0,
@@ -775,8 +795,9 @@ export async function listKnowledgePackages(opts?: {
   if (opts?.auditStatus) query = query.eq("auditStatus", opts.auditStatus);
   if (opts?.isListed !== undefined) query = query.eq("isListed", opts.isListed);
   if (opts?.search) query = query.ilike("displayName", `%${escapeLike(opts.search)}%`);
-  query = (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1);
-  const { data, count, error } = await query;
+  const { data, count, error } = await withRetry(() =>
+    (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1).abortSignal(AbortSignal.timeout(8_000))
+  );
   if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   return { packages: data || [], total: count || 0 };
 }
@@ -835,8 +856,9 @@ export async function listBarterTransactions(opts?: {
   let query = getDb().from("barter_transactions").select("*", { count: "exact" });
   if (opts?.agentId) query = query.or(`proposerAgentId.eq.${opts.agentId},responderAgentId.eq.${opts.agentId}`);
   if (opts?.status) query = query.eq("status", opts.status);
-  query = (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1);
-  const { data, count, error } = await query;
+  const { data, count, error } = await withRetry(() =>
+    (query as any).order("createdAt", { ascending: false }).range(offset, offset + limit - 1).abortSignal(AbortSignal.timeout(8_000))
+  );
   if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   return { transactions: data || [], total: count || 0 };
 }
@@ -880,8 +902,9 @@ export async function listHeartbeatLogs(opts?: {
   let query = getDb().from("heartbeat_logs").select("*", { count: "exact" });
   if (opts?.agentId) query = query.eq("agentId", opts.agentId);
   if (opts?.healthy !== undefined) query = query.eq("healthy", opts.healthy);
-  query = (query as any).order("timestamp", { ascending: false }).range(offset, offset + limit - 1);
-  const { data, count, error } = await query;
+  const { data, count, error } = await withRetry(() =>
+    (query as any).order("timestamp", { ascending: false }).range(offset, offset + limit - 1).abortSignal(AbortSignal.timeout(8_000))
+  );
   if (error) { logger.error({ err: error }, "Database query failed"); throw new Error("Database query failed"); }
   return { logs: data || [], total: count || 0 };
 }
