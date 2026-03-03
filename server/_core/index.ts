@@ -22,6 +22,7 @@ import { startScheduledJobs } from "../scheduled-jobs";
 import { registerMetricsRoute, incrementRequests, incrementErrors } from "../metrics";
 import { registerSSERoute } from "../sse";
 import { handleStripeWebhook } from "../stripe-webhooks";
+import { registerA2ARoutes } from "../a2a-protocol";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -80,6 +81,8 @@ async function startServer() {
   registerTelegramAuthRoutes(app);
   // YouTube multi-tenant routes
   registerYouTubeRoutes(app);
+  // A2A Protocol endpoint for Google Agent2Agent interoperability
+  registerA2ARoutes(app);
   // Route-specific rate limiters for sensitive tRPC endpoints
   app.use("/api/trpc/enrollment", enrollmentLimiter);
   app.use("/api/trpc/economy.transfer", transferLimiter);
