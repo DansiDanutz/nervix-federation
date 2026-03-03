@@ -1199,7 +1199,6 @@ export async function getFirstAgentIdForUser(userId: number): Promise<string | n
   return data?.agentId || null;
 }
 
-<<<<<<< HEAD
 // ─── Brain Layer (Agent Thoughts) ────────────────────────────────────────────
 
 export async function createThought(thought: InsertAgentThought) {
@@ -1306,7 +1305,8 @@ export async function updateThoughtEmbedding(id: string, embedding: number[]) {
       throw new Error("Failed to update thought embedding");
     }
   }
-=======
+}
+
 // ─── Auth Tokens (password reset + email verification) ──────────────────────
 
 export async function saveAuthToken(token: string, type: "reset" | "verify", email: string, openId: string | null, expiresAt: Date) {
@@ -1339,5 +1339,4 @@ export async function hasRecentToken(email: string, type: "reset" | "verify", wi
     .gt("created_at", since)
     .limit(1);
   return data != null && data.length > 0;
->>>>>>> 997b3d6 (fix: migrate auth tokens to DB + enable CSP)
 }
