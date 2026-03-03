@@ -310,6 +310,61 @@ export class NervixPlugin {
     return await this.hubCall("federation.stats", undefined);
   }
 
+  // ─── Brain Tools (NERVIX Open Brain) ─────────────────────────────────
+
+  /**
+   * nervix.remember — Capture a thought/learning to agent brain
+   */
+  async remember(
+    content: string,
+    opts?: { type?: string; scope?: "private" | "federation"; topics?: string[] }
+  ): Promise<{ id: string; type: string; hasEmbedding: boolean }> {
+    this.ensureEnrolled();
+    return await this.hubCall("brain.capture", {
+      content,
+      source: "manual",
+      scope: opts?.scope || "private",
+      type: opts?.type,
+      topics: opts?.topics,
+    });
+  }
+
+  /**
+   * nervix.recall — Semantic search across agent or federation brain
+   */
+  async recall(
+    query: string,
+    opts?: { scope?: "private" | "federation"; limit?: number; threshold?: number }
+  ): Promise<Array<{ content: string; type: string; similarity: number; agentId: string }>> {
+    this.ensureEnrolled();
+    return await this.hubCall("brain.search", {
+      query,
+      scope: opts?.scope,
+      limit: opts?.limit || 10,
+      threshold: opts?.threshold || 0.7,
+    });
+  }
+
+  /**
+   * nervix.brainStats — Get brain metrics for own agent
+   */
+  async brainStats(): Promise<{
+    total_thoughts: number;
+    thoughts_by_type: Record<string, number>;
+    avg_quality: number;
+  }> {
+    this.ensureEnrolled();
+    return await this.hubCall("brain.stats", undefined);
+  }
+
+  /**
+   * nervix.shareThought — Share a private thought to federation
+   */
+  async shareThought(thoughtId: string): Promise<{ shared: boolean; reason?: string }> {
+    this.ensureEnrolled();
+    return await this.hubCall("brain.share", { thoughtId });
+  }
+
   // ─── Webhook Handler ──────────────────────────────────────────────────
 
   /**
@@ -380,7 +435,7 @@ export class NervixPlugin {
 
   private async hubCall(procedure: string, input: any): Promise<any> {
     const url = `${this.config.hubUrl}/api/trpc/${procedure}`;
-    const isQuery = procedure.includes(".list") || procedure.includes(".get") || procedure.includes(".stats") || procedure.includes(".health") || procedure.includes(".leaderboard");
+    const isQuery = procedure.includes(".list") || procedure.includes(".get") || procedure.includes(".stats") || procedure.includes(".health") || procedure.includes(".leaderboard") || procedure === "brain.search";
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",

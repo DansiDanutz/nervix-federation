@@ -25,6 +25,7 @@ import VerifyEmail from "./pages/VerifyEmail";
 import ClawHubPublish from "./pages/ClawHubPublish";
 import OnboardAgent from "./pages/OnboardAgent";
 import Admin from "./pages/Admin";
+import BrainDashboard from "./pages/Brain";
 import AgentManage from "./pages/AgentManage";
 import BulkOnboard from "./pages/BulkOnboard";
 import ChallengeVerify from "./pages/ChallengeVerify";
@@ -51,6 +52,7 @@ function Router() {
       <Route path={"/leaderboard"} component={Leaderboard} />
       <Route path={"/clawhub"} component={ClawHubPublish} />
       <Route path={"/onboard"} component={OnboardAgent} />
+      <Route path={"/brain"} component={BrainDashboard} />
       <Route path={"/admin"} component={Admin} />
       <Route path={"/bulk-onboard"} component={BulkOnboard} />
       <Route path={"/verify"} component={ChallengeVerify} />

@@ -16,6 +16,7 @@ import { broadcastEvent } from "./sse";
 import { alertLargeTransfer } from "./telegram-alerts";
 import { getMetricCounters } from "./metrics";
 import { deliverWebhook } from "./webhook-delivery";
+import * as brainService from "./services/brain-service";
 
 // ─── Fee Calculation Helper ────────────────────────────────────────────────
 function calculateFee(amount: number, feePercent: number, isOpenClaw: boolean = false): { fee: number; netAmount: number; discount: number } {
@@ -767,6 +768,17 @@ const tasksRouter = router({
 
       broadcastEvent("task.updated", { taskId: input.taskId, status: input.status });
       if (input.status === "completed" || input.status === "failed") broadcastEvent("federation.stats");
+
+      // Auto-capture learning to agent brain on task completion
+      if (input.status === "completed" && task.assigneeId) {
+        brainService.captureFromTaskCompletion(
+          task.assigneeId,
+          task.title || "Untitled task",
+          input.taskId,
+          input.errorMessage || "Task completed successfully",
+          task.outputArtifacts as Record<string, unknown> | undefined
+        ).catch(err => logger.warn({ err, taskId: input.taskId }, "Brain auto-capture failed (non-blocking)"));
+      }
 
       return updated;
     }),
@@ -1938,6 +1950,92 @@ const agentProfileRouter = router({
     }),
 });
 
+// ─── Brain Router (NERVIX Open Brain) ────────────────────────────────────────
+const THOUGHT_TYPES = ["learning", "pattern", "solution", "insight", "reference", "debug_note"] as const;
+const THOUGHT_SCOPES = ["private", "federation", "marketplace"] as const;
+const THOUGHT_SOURCES = ["task_completion", "manual", "a2a", "telegram", "mcp"] as const;
+
+const brainRouter = router({
+  capture: agentProcedure
+    .input(z.object({
+      content: z.string().min(1).max(50000),
+      source: z.enum(THOUGHT_SOURCES).optional().default("manual"),
+      scope: z.enum(THOUGHT_SCOPES).optional().default("private"),
+      type: z.enum(THOUGHT_TYPES).optional(),
+      topics: z.array(z.string()).optional(),
+      relatedTasks: z.array(z.string()).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const result = await brainService.captureThought(
+        ctx.agentId,
+        input.content,
+        input.source,
+        input.scope,
+        {
+          type: input.type,
+          topics: input.topics,
+          related_tasks: input.relatedTasks,
+        }
+      );
+      return result;
+    }),
+
+  search: agentProcedure
+    .input(z.object({
+      query: z.string().min(1).max(1000),
+      scope: z.enum(THOUGHT_SCOPES).optional(),
+      targetAgentId: z.string().optional(),
+      threshold: z.number().min(0).max(1).optional().default(0.7),
+      limit: z.number().min(1).max(50).optional().default(10),
+    }))
+    .query(async ({ input, ctx }) => {
+      const results = await brainService.searchBrain(ctx.agentId, input.query, {
+        targetAgentId: input.targetAgentId,
+        scope: input.scope,
+        threshold: input.threshold,
+        limit: input.limit,
+      });
+      return results;
+    }),
+
+  list: agentProcedure
+    .input(z.object({
+      scope: z.enum(THOUGHT_SCOPES).optional(),
+      type: z.enum(THOUGHT_TYPES).optional(),
+      limit: z.number().min(1).max(100).optional().default(50),
+      offset: z.number().min(0).optional().default(0),
+    }).optional())
+    .query(async ({ input, ctx }) => {
+      return db.listThoughts(ctx.agentId, {
+        scope: input?.scope,
+        type: input?.type,
+        limit: input?.limit || 50,
+        offset: input?.offset || 0,
+      });
+    }),
+
+  stats: agentProcedure.query(async ({ ctx }) => {
+    return brainService.getBrainStats(ctx.agentId);
+  }),
+
+  federationStats: publicProcedure.query(async () => {
+    return brainService.getBrainStats(null);
+  }),
+
+  share: agentProcedure
+    .input(z.object({ thoughtId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      return brainService.shareToFederation(input.thoughtId, ctx.agentId);
+    }),
+
+  delete: agentProcedure
+    .input(z.object({ thoughtId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      await db.deleteThought(input.thoughtId, ctx.agentId);
+      return { deleted: true };
+    }),
+});
+
 // ─── Main App Router ────────────────────────────────────────────────────────
 export const appRouter = router({
   system: systemRouter,
@@ -1995,6 +2093,7 @@ export const appRouter = router({
   fleet: fleetRouter,
   leaderboard: leaderboardRouter,
   agentProfile: agentProfileRouter,
+  brain: brainRouter,
   admin: router({
     seedDemo: adminProcedure.mutation(async () => {
       const result = await seedDemoData();

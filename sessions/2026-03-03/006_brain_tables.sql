@@ -207,21 +207,29 @@ $$;
 -- Enable RLS on agent_thoughts
 ALTER TABLE agent_thoughts ENABLE ROW LEVEL SECURITY;
 
--- Service role has full access (used by server-side tRPC)
-CREATE POLICY "Service role full access on agent_thoughts"
-  ON agent_thoughts
-  FOR ALL
-  USING (true)
-  WITH CHECK (true);
+-- Service role has full access (idempotent)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'agent_thoughts'
+    AND policyname = 'Service role full access on agent_thoughts'
+  ) THEN
+    CREATE POLICY "Service role full access on agent_thoughts"
+      ON agent_thoughts FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+END $$;
 
 -- Enable RLS on brain_access_log
 ALTER TABLE brain_access_log ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Service role full access on brain_access_log"
-  ON brain_access_log
-  FOR ALL
-  USING (true)
-  WITH CHECK (true);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'brain_access_log'
+    AND policyname = 'Service role full access on brain_access_log'
+  ) THEN
+    CREATE POLICY "Service role full access on brain_access_log"
+      ON brain_access_log FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+END $$;
 
 -- ─── Step 9: Embedding Update Helper ──────────────────────────────────────────
 

@@ -14,4 +14,6 @@ export const ENV = {
   stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? "",
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
   stripePublishableKey: process.env.VITE_STRIPE_PUBLISHABLE_KEY ?? "",
+  // Brain layer (OpenRouter for embeddings + classification)
+  openrouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
 };
