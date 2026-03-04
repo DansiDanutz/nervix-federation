@@ -7,6 +7,8 @@
  * 3. Heartbeat monitor — mark stale agents offline (every 2 min)
  * 4. Webhook retry — retry failed A2A messages (every 1 min)
  * 5. Session cleanup — delete expired sessions (every 1 hour)
+ * 6. AgentMail inbox monitor — poll for new emails (every 5 min)
+ * 7. Data retention — purge old logs and historical data (every 24 hours)
  */
 import crypto from "crypto";
 import { logger } from "./_core/logger";
@@ -248,6 +250,76 @@ async function cleanupExpiredSessions() {
   }
 }
 
+// ─── Job 7: Data retention policy (P3 security fix) ───────────────────────
+/**
+ * Purge old data according to retention policy:
+ * - audit_log: Delete entries older than 1 year (except critical events)
+ * - heartbeat_logs: Delete entries older than 30 days (keep recent history)
+ * - a2a_messages: Delete expired/delivered entries older than 90 days
+ * - task_results: Delete results for completed tasks older than 180 days
+ */
+async function applyDataRetentionPolicy() {
+  try {
+    const db = getDb();
+    const now = new Date();
+    let totalDeleted = 0;
+
+    // 1. Delete audit logs older than 1 year (except enrollment, suspension, and financial events)
+    const oneYearAgo = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString();
+    const { count: auditCount } = await db
+      .from("audit_log")
+      .delete()
+      .lt("createdAt", oneYearAgo)
+      .not("eventType", "in", '("enrollment_request","enrollment_verified","agent_suspended","agent_activated","escrow_created","escrow_released","escrow_disputed")');
+    if ((auditCount || 0) > 0) {
+      totalDeleted += auditCount || 0;
+      log("data-retention", `Deleted ${auditCount} old audit log entries (>1 year, non-critical)`);
+    }
+
+    // 2. Delete heartbeat logs older than 30 days
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { count: heartbeatCount } = await db
+      .from("heartbeat_logs")
+      .delete()
+      .lt("timestamp", thirtyDaysAgo);
+    if ((heartbeatCount || 0) > 0) {
+      totalDeleted += heartbeatCount || 0;
+      log("data-retention", `Deleted ${heartbeatCount} old heartbeat log entries (>30 days)`);
+    }
+
+    // 3. Delete A2A messages older than 90 days (delivered or expired only)
+    const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const { count: a2aCount } = await db
+      .from("a2a_messages")
+      .delete()
+      .in("status", '("delivered","expired")')
+      .lt("createdAt", ninetyDaysAgo);
+    if ((a2aCount || 0) > 0) {
+      totalDeleted += a2aCount || 0;
+      log("data-retention", `Deleted ${a2aCount} old A2A messages (>90 days, delivered/expired)`);
+    }
+
+    // 4. Delete task results for tasks completed > 180 days ago
+    const oneEightyDaysAgo = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000).toISOString();
+    const { count: resultCount } = await db
+      .from("task_results")
+      .delete()
+      .lt("submittedAt", oneEightyDaysAgo);
+    if ((resultCount || 0) > 0) {
+      totalDeleted += resultCount || 0;
+      log("data-retention", `Deleted ${resultCount} old task results (>180 days)`);
+    }
+
+    if (totalDeleted > 0) {
+      log("data-retention", `Total records deleted: ${totalDeleted}`);
+    } else {
+      log("data-retention", "No records to delete");
+    }
+  } catch (e: any) {
+    log("data-retention", `Error: ${e.message}`);
+  }
+}
+
 // ─── Start all jobs ─────────────────────────────────────────────────────────
 export function startScheduledJobs() {
   log("init", "Starting scheduled jobs...");
@@ -270,16 +342,35 @@ export function startScheduledJobs() {
   // Job 5: Session cleanup — every 1 hour
   setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
 
+  // Job 6: AgentMail inbox monitor — every 5 minutes
+  setInterval(pollAgentMailInbox, 5 * 60 * 1000);
+  pollAgentMailInbox(); // check immediately on startup
+
+  // Job 7: Data retention policy — every 24 hours (runs at 2 AM UTC via cron-like offset)
+  const msUntil2AM = calculateDelayTo2AM();
+  setTimeout(() => {
+    applyDataRetentionPolicy();
+    setInterval(applyDataRetentionPolicy, 24 * 60 * 60 * 1000); // Run every 24 hours after first run
+  }, msUntil2AM);
+
   // Run cleanup jobs once at startup
   cleanupEnrollments();
   markStaleAgentsOffline();
   cleanupExpiredSessions();
 
-  // Job 6: AgentMail inbox monitor — every 5 minutes
-  setInterval(pollAgentMailInbox, 5 * 60 * 1000);
-  pollAgentMailInbox(); // check immediately on startup
+  log("init", "All 8 scheduled jobs started");
+}
 
-  log("init", "All 7 scheduled jobs started");
+// Helper: Calculate delay until 2 AM UTC for data retention job
+function calculateDelayTo2AM(): number {
+  const now = new Date();
+  const next2AM = new Date(now);
+  next2AM.setUTCHours(2, 0, 0, 0);
+  if (now >= next2AM) {
+    // Already past 2 AM today, schedule for tomorrow
+    next2AM.setDate(next2AM.getDate() + 1);
+  }
+  return next2AM.getTime() - now.getTime();
 }
 
 // ─── Job 6: AgentMail inbox monitor ─────────────────────────────────────────

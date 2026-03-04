@@ -26,6 +26,7 @@ import { registerSSERoute } from "../sse";
 import { handleStripeWebhook } from "../stripe-webhooks";
 import { registerTelegramBotWebhook, setTelegramWebhook } from "../telegram-bot";
 import { createCSRFMiddleware } from "./csrf";
+import { correlationIdMiddleware } from "./correlation-id";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -62,6 +63,10 @@ async function startServer() {
   const app = express();
   app.set("trust proxy", 1); // Trust first proxy (nginx) for correct client IP in rate limiter
   const server = createServer(app);
+
+  // Correlation ID tracking (P3 security fix - enables request tracing across logs)
+  app.use(correlationIdMiddleware);
+
   // Security headers
   app.use(helmet({
     contentSecurityPolicy: {
